@@ -3,7 +3,6 @@ import sys
 import unittest
 import tempfile
 import types
-import shutil
 import os
 import gc
 import weakref
@@ -737,18 +736,13 @@ class TestUtf8(unittest.TestCase):
 
 
 class TestFilename(unittest.TestCase):
-    def setUp(self):
-        self.workdir = tempfile.mkdtemp()
-
-    def tearDown(self):
-        shutil.rmtree(self.workdir)
-
     def tests_filename_list_return(self):
         assert GIMarshallingTests.filename_list_return() == []
 
     @unittest.skipIf(os.name == "nt", "fixme")
     def test_filename_in(self):
-        fname = os.path.join(self.workdir, "testäø.txt")
+        workdir = tempfile.mkdtemp()
+        fname = os.path.join(workdir, "testäø.txt")
 
         try:
             os.path.exists(fname)
@@ -770,7 +764,8 @@ class TestFilename(unittest.TestCase):
         self.assertRaises(TypeError, GIMarshallingTests.filename_exists, None)
 
     def test_filename_in_pathlike(self):
-        fpath = pathlib.Path(self.workdir) / "test_pathlike.txt"
+        workdir = tempfile.mkdtemp()
+        fpath = pathlib.Path(workdir) / "test_pathlike.txt"
 
         try:
             os.path.exists(fpath)
@@ -898,14 +893,15 @@ class TestFilename(unittest.TestCase):
         if os.name != "nt":
             return
 
-        path = os.path.join(self.workdir, "\ud83d")
+        workdir = tempfile.mkdtemp()
+        path = os.path.join(workdir, "\ud83d")
         with open(path, "wb"):
             self.assertTrue(os.path.exists(path))
             self.assertTrue(GIMarshallingTests.filename_exists(path))
         os.unlink(path)
 
     def test_path_exists_various_types(self):
-        wd = self.workdir
+        wd = tempfile.mkdtemp()
         wdb = os.fsencode(wd)
 
         paths = [(wdb, b"foo-1"), (wd, "foo-2"), (wd, "öäü-3")]
@@ -1278,6 +1274,7 @@ class TestGStrv(unittest.TestCase):
 
 
 class TestArrayGVariant(unittest.TestCase):
+    @pytest.mark.thread_unsafe
     def test_array_gvariant_none_in(self):
         v = [GLib.Variant("i", 27), GLib.Variant("s", "Hello")]
         returned = [
@@ -1313,6 +1310,7 @@ class TestGArray(unittest.TestCase):
         GIMarshallingTests.garray_unichar_none_in(CONSTANT_UCS4)
         GIMarshallingTests.garray_unichar_none_in(list(CONSTANT_UCS4))
 
+    @pytest.mark.thread_unsafe
     def test_garray_int_none_return(self):
         self.assertEqual([-1, 0, 1, 2], GIMarshallingTests.garray_int_none_return())
 
@@ -1331,6 +1329,7 @@ class TestGArray(unittest.TestCase):
             GIMarshallingTests.garray_enum_none_return(),
         )
 
+    @pytest.mark.thread_unsafe
     def test_garray_utf8_none_return(self):
         self.assertEqual(["0", "1", "2"], GIMarshallingTests.garray_utf8_none_return())
 
@@ -1358,6 +1357,7 @@ class TestGArray(unittest.TestCase):
     def test_garray_utf8_none_in(self):
         GIMarshallingTests.garray_utf8_none_in(Sequence(["0", "1", "2"]))
 
+    @pytest.mark.thread_unsafe
     def test_garray_utf8_none_out(self):
         self.assertEqual(["0", "1", "2"], GIMarshallingTests.garray_utf8_none_out())
 
@@ -1374,6 +1374,7 @@ class TestGArray(unittest.TestCase):
             ["0", "1", "2"], GIMarshallingTests.garray_utf8_full_out_caller_allocated()
         )
 
+    @pytest.mark.thread_unsafe
     def test_garray_utf8_none_inout(self):
         self.assertEqual(
             ["-2", "-1", "0", "1"],
@@ -1394,6 +1395,7 @@ class TestGArray(unittest.TestCase):
 
 
 class TestGPtrArray(unittest.TestCase):
+    @pytest.mark.thread_unsafe
     def test_gptrarray_utf8_none_return(self):
         self.assertEqual(
             ["0", "1", "2"], GIMarshallingTests.gptrarray_utf8_none_return()
@@ -1429,6 +1431,7 @@ class TestGPtrArray(unittest.TestCase):
     def test_gptrarray_utf8_full_out(self):
         self.assertEqual(["0", "1", "2"], GIMarshallingTests.gptrarray_utf8_full_out())
 
+    @pytest.mark.thread_unsafe
     def test_gptrarray_utf8_none_inout(self):
         self.assertEqual(
             ["-2", "-1", "0", "1"],
@@ -1515,14 +1518,17 @@ class TestGByteArray(unittest.TestCase):
 
 
 class TestGList(unittest.TestCase):
+    @pytest.mark.thread_unsafe
     def test_glist_int_none_return(self):
         self.assertEqual([-1, 0, 1, 2], GIMarshallingTests.glist_int_none_return())
 
+    @pytest.mark.thread_unsafe
     def test_glist_uint32_none_return(self):
         self.assertEqual(
             [0, GLib.MAXUINT32], GIMarshallingTests.glist_uint32_none_return()
         )
 
+    @pytest.mark.thread_unsafe
     def test_glist_utf8_none_return(self):
         self.assertEqual(["0", "1", "2"], GIMarshallingTests.glist_utf8_none_return())
 
@@ -1570,6 +1576,7 @@ class TestGList(unittest.TestCase):
     def test_glist_utf8_full_out(self):
         self.assertEqual(["0", "1", "2"], GIMarshallingTests.glist_utf8_full_out())
 
+    @pytest.mark.thread_unsafe
     def test_glist_utf8_none_inout(self):
         self.assertEqual(
             ["-2", "-1", "0", "1"],
@@ -1590,9 +1597,11 @@ class TestGList(unittest.TestCase):
 
 
 class TestGSList(unittest.TestCase):
+    @pytest.mark.thread_unsafe
     def test_gslist_int_none_return(self):
         self.assertEqual([-1, 0, 1, 2], GIMarshallingTests.gslist_int_none_return())
 
+    @pytest.mark.thread_unsafe
     def test_gslist_utf8_none_return(self):
         self.assertEqual(["0", "1", "2"], GIMarshallingTests.gslist_utf8_none_return())
 
@@ -1639,6 +1648,7 @@ class TestGSList(unittest.TestCase):
     def test_gslist_utf8_full_out(self):
         self.assertEqual(["0", "1", "2"], GIMarshallingTests.gslist_utf8_full_out())
 
+    @pytest.mark.thread_unsafe
     def test_gslist_utf8_none_inout(self):
         self.assertEqual(
             ["-2", "-1", "0", "1"],
@@ -1683,11 +1693,13 @@ class TestGHashTable(unittest.TestCase):
             {"-1": GLib.MAXUINT32 + 1, "0": 0, "1": 1, "2": 2}
         )
 
+    @pytest.mark.thread_unsafe
     def test_ghashtable_int_none_return(self):
         self.assertEqual(
             {-1: 1, 0: 0, 1: -1, 2: -2}, GIMarshallingTests.ghashtable_int_none_return()
         )
 
+    @pytest.mark.thread_unsafe
     def test_ghashtable_int_none_return2(self):
         self.assertEqual(
             {"-1": "1", "0": "0", "1": "-1", "2": "-2"},
@@ -1732,6 +1744,7 @@ class TestGHashTable(unittest.TestCase):
             {"-1": "1", "0": "0", "1": "-1", "2": "-2"}
         )
 
+    @pytest.mark.thread_unsafe
     def test_ghashtable_utf8_none_out(self):
         self.assertEqual(
             {"-1": "1", "0": "0", "1": "-1", "2": "-2"},
@@ -1750,6 +1763,7 @@ class TestGHashTable(unittest.TestCase):
             GIMarshallingTests.ghashtable_utf8_full_out(),
         )
 
+    @pytest.mark.thread_unsafe
     def test_ghashtable_utf8_none_inout(self):
         i = {"-1": "1", "0": "0", "1": "-1", "2": "-2"}
         self.assertEqual(
@@ -1780,6 +1794,7 @@ class TestGHashTable(unittest.TestCase):
             }
         )
 
+    @pytest.mark.thread_unsafe
     def test_ghashtable_enum_none_return(self):
         self.assertEqual(
             {
@@ -1893,6 +1908,7 @@ class TestGValue(unittest.TestCase):
         values = GIMarshallingTests.return_gvalue_flat_array()
         self.assertEqual(values, [42, "42", True])
 
+    @pytest.mark.thread_unsafe
     def test_gvalue_gobject_ref_counts_simple(self):
         obj = GObject.Object()
         grefcount = obj.__grefcount__
@@ -1901,6 +1917,7 @@ class TestGValue(unittest.TestCase):
         gc.collect()
         assert obj.__grefcount__ == grefcount
 
+    @pytest.mark.thread_unsafe
     def test_gvalue_gobject_ref_counts(self):
         # Tests a GObject held by a GValue
         obj = GObject.Object()
@@ -1939,6 +1956,7 @@ class TestGValue(unittest.TestCase):
         self.assertEqual(ref(), None)
 
     @unittest.skipUnless(hasattr(sys, "getrefcount"), "no sys.getrefcount")
+    @pytest.mark.thread_unsafe
     def test_gvalue_boxed_ref_counts(self):
         # Tests a boxed type wrapping a python object pointer (TYPE_PYOBJECT)
         # held by a GValue
@@ -2247,6 +2265,7 @@ class TestGEnum(unittest.TestCase):
             GIMarshallingTests.GEnum.__module__, "gi.repository.GIMarshallingTests"
         )
 
+    @pytest.mark.thread_unsafe
     def test_enum_values_property(self):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", PyGIDeprecationWarning)
@@ -2346,6 +2365,7 @@ class TestGFlags(unittest.TestCase):
             GIMarshallingTests.Flags.__module__, "gi.repository.GIMarshallingTests"
         )
 
+    @pytest.mark.thread_unsafe
     def test_flags_values_property(self):
         flags_values = {
             1: GIMarshallingTests.Flags.VALUE1,
@@ -2645,6 +2665,7 @@ class TestStructure(unittest.TestCase):
         self.assertEqual(struct.long_, 42)
         self.assertEqual(struct.string_, "hello")
 
+    @pytest.mark.thread_unsafe
     def test_union_init(self):
         with warnings.catch_warnings(record=True) as warn:
             warnings.simplefilter("always")
@@ -2793,6 +2814,7 @@ class TestGObject(unittest.TestCase):
     #        object_.int_ = 42
     #        self.assertEqual(object_.int_, 42)
 
+    @pytest.mark.thread_unsafe
     def test_object_none_return(self):
         object_ = GIMarshallingTests.Object.none_return()
         self.assertTrue(isinstance(object_, GIMarshallingTests.Object))
@@ -2816,6 +2838,7 @@ class TestGObject(unittest.TestCase):
 
         self.assertRaises(TypeError, GIMarshallingTests.Object.none_in, None)
 
+    @pytest.mark.thread_unsafe
     def test_object_none_out(self):
         object_ = GIMarshallingTests.Object.none_out()
         self.assertTrue(isinstance(object_, GIMarshallingTests.Object))
@@ -2829,6 +2852,7 @@ class TestGObject(unittest.TestCase):
         self.assertTrue(isinstance(object_, GIMarshallingTests.Object))
         self.assertEqual(object_.__grefcount__, 1)
 
+    @pytest.mark.thread_unsafe
     def test_object_none_inout(self):
         object_ = GIMarshallingTests.Object(int=42)
         new_object = GIMarshallingTests.Object.none_inout(object_)
@@ -3025,6 +3049,7 @@ class TestPythonGObject(unittest.TestCase):
         self.assertEqual(object_.props.int, 84)
 
     @unittest.skipUnless(hasattr(sys, "getrefcount"), "no sys.getrefcount")
+    @pytest.mark.thread_unsafe
     def test_vfunc_return_ref_count(self):
         obj = self.Object(int=42)
         ref_count = sys.getrefcount(obj.return_for_caller_allocated_out_parameter)
@@ -3152,6 +3177,7 @@ class TestPythonGObject(unittest.TestCase):
         object_.call_vfunc_with_callback()
         self.assertTrue(object_.worked)
 
+    @pytest.mark.thread_unsafe
     def test_exception_in_vfunc_return_value(self):
         obj = self.ErrorObject()
         with capture_exceptions() as exc:
@@ -3159,6 +3185,7 @@ class TestPythonGObject(unittest.TestCase):
         self.assertEqual(len(exc), 1)
         self.assertEqual(exc[0].type, ValueError)
 
+    @pytest.mark.thread_unsafe
     def test_callback_owned_box(self):
         def callback(box, data):
             self.box = box
@@ -3171,40 +3198,42 @@ class TestPythonGObject(unittest.TestCase):
         self.assertEqual(self.box.long_, 1)
 
     def test_callback_user_data_after_callback(self):
+        callback_args = []
+
         def callback(*args):
-            self.callback_args = args
+            nonlocal callback_args
+            callback_args = args
 
         GIMarshallingTests.callback_user_data_after_callback(1, 2, callback)
-        self.assertEqual(self.callback_args, (1, 2))
+        self.assertEqual(callback_args, (1, 2))
 
         GIMarshallingTests.callback_user_data_after_callback(3, 4, callback, "testdata")
-        self.assertEqual(self.callback_args, (3, 4, "testdata"))
+        self.assertEqual(callback_args, (3, 4, "testdata"))
 
         GIMarshallingTests.callback_user_data_after_callback(
             5, 6, callback, "more testdata", "even more testdata"
         )
-        self.assertEqual(
-            self.callback_args, (5, 6, "more testdata", "even more testdata")
-        )
+        self.assertEqual(callback_args, (5, 6, "more testdata", "even more testdata"))
 
     def test_callback_user_data_before_callback(self):
+        callback_args = []
+
         def callback(*args):
-            self.callback_args = args
+            nonlocal callback_args
+            callback_args = args
 
         GIMarshallingTests.callback_user_data_before_callback(1, 2, None, callback)
-        self.assertEqual(self.callback_args, (1, 2, None))
+        self.assertEqual(callback_args, (1, 2, None))
 
         GIMarshallingTests.callback_user_data_before_callback(
             3, 4, "testdata", callback
         )
-        self.assertEqual(self.callback_args, (3, 4, "testdata"))
+        self.assertEqual(callback_args, (3, 4, "testdata"))
 
         GIMarshallingTests.callback_user_data_before_callback(
             5, 6, ("more testdata", "even more testdata"), callback
         )
-        self.assertEqual(
-            self.callback_args, (5, 6, ("more testdata", "even more testdata"))
-        )
+        self.assertEqual(callback_args, (5, 6, ("more testdata", "even more testdata")))
 
 
 class TestMultiOutputArgs(unittest.TestCase):
@@ -3385,6 +3414,7 @@ class TestMRO(unittest.TestCase):
         class TestInterfaceImpl3(TestInterfaceImpl, GIMarshallingTests.Interface2):
             pass
 
+    @pytest.mark.thread_unsafe
     def test_old_style_mixin(self):
         # Note: Old style classes don't exist in Python 3
         class Mixin:
@@ -3708,6 +3738,7 @@ class TestModule(unittest.TestCase):
             item = getattr(GIMarshallingTests, item_name)
             self.assertTrue(hasattr(item, "__class__"))
 
+    @pytest.mark.thread_unsafe
     def test_help(self):
         with capture_output() as (stdout, _stderr):
             help(GIMarshallingTests)
@@ -3734,6 +3765,7 @@ class TestProjectVersion(unittest.TestCase):
 
 
 class TestGIWarning(unittest.TestCase):
+    @pytest.mark.thread_unsafe
     def test_warning(self):
         ignored_by_default = (
             DeprecationWarning,
@@ -3749,6 +3781,8 @@ class TestGIWarning(unittest.TestCase):
             self.assertFalse(issubclass(warn[0].category, ignored_by_default))
 
 
+# deprecation warnings are only triggered once
+@pytest.mark.thread_unsafe
 class TestDeprecation(unittest.TestCase):
     def test_method(self):
         d = GLib.Date.new()

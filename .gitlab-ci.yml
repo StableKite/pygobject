@@ -144,7 +144,10 @@ windows:
 
 gnome-master:
   stage: build
-  image: quay.io/gnome_infrastructure/gnome-runtime-images:gnome-master
+  image:
+    name: quay.io/gnome_infrastructure/gnome-runtime-images:gnome-master
+    docker:
+      user: root
   tags:
     - flatpak
   parallel:
@@ -155,8 +158,10 @@ gnome-master:
   artifacts:
     paths:
       - coverage/
+  before_script:
+    - dnf install --assumeyes xorg-x11-server-Xvfb
   script:
-    - bash -x ./.gitlab-ci/test-flatpak.sh
+    - runuser --user build -- bash -x ./.gitlab-ci/test-flatpak.sh
 
 linux-pdm:
   stage: build

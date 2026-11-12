@@ -52,6 +52,21 @@ RUN set -eux; \
     fi
 
 ARG HOST_USER_ID=5555
+# CPython 3.15.2 predates the upstream gh-154643 header correction.
+# Install the release-matched backport and its stricter C API test flags.
+RUN set -eux; \
+    if [ "${PYTHON_VERSION:-}" = "3.15.2" ]; then \
+        git clone --depth=1 --branch=codex/release-3.15.2-header-fix \
+            https://github.com/StableKite/cpython.git /tmp/cpython-ci-headers; \
+        git -C /tmp/cpython-ci-headers rev-parse HEAD; \
+        python_include="$(python -c 'import sysconfig; print(sysconfig.get_path("include"))')"; \
+        python_stdlib="$(python -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"; \
+        install -m644 /tmp/cpython-ci-headers/Include/pyport.h "$python_include/pyport.h"; \
+        install -m644 /tmp/cpython-ci-headers/Include/cpython/pyatomic.h "$python_include/cpython/pyatomic.h"; \
+        install -m644 /tmp/cpython-ci-headers/Lib/test/test_cext/setup.py "$python_stdlib/test/test_cext/setup.py"; \
+        rm -rf /tmp/cpython-ci-headers; \
+    fi
+
 ENV HOST_USER_ID=${HOST_USER_ID}
 RUN useradd -u $HOST_USER_ID -ms /bin/bash user \
     && echo 'user ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers

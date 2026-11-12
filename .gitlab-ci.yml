@@ -13,7 +13,7 @@ spec:
       default: "python-3.14"
     build_images:
       options: ["never", "always"]
-      default: "never"
+      default: "always"
 
 ---
 
@@ -33,8 +33,8 @@ stages:
   - deploy
 
 variables:
-  REGISTRY: registry.gitlab.gnome.org/gnome/pygobject
-  CI_IMAGE: registry.gitlab.gnome.org/gnome/pygobject/ci
+  REGISTRY: $CI_REGISTRY_IMAGE
+  CI_IMAGE: $CI_REGISTRY_IMAGE/ci
   TARBALL_ARTIFACT_PATH: "dist/${CI_PROJECT_NAME}-${CI_COMMIT_TAG}.tar.gz"
 
 # Normal build whenever Dockerfile has not changed

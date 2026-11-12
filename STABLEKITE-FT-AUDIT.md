@@ -1,50 +1,68 @@
-# Experimental free-threading integration
+# Free-threading integration and parallel validation
 
-This branch integrates GNOME [MR !565](https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/565)
-into current main, retaining the original authors and commits. It is an
-experiment, not the source selected by SingleBoardInstall.
+This integrates GNOME [MR565](https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/565)
+with current main, retaining its authors and commits. The matching 3.57.1
+backport is selected by SBI through the rolling packaging branch
+`codex/ubuntu-ft/3.57.1-1`; this main-based feature is its validation context.
 
 Inputs tested on 12 November 2026:
 
-- Current main: `3a52debeef4b34a655aab985d93a927be1dac803`.
-- Our minimal reference-count test fix, [MR !577](https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/577):
-  `d6ab369f5779f3c5c343fe086adfa7729796959e`.
-- Complete draft !565: `8eb64418b7d985ad36fbb7c8026997693064458f`.
-- Our callable-cache critical-section scope correction, also submitted
-  independently as [MR !578](https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/578).
+- Main: `3a52debeef4b34a655aab985d93a927be1dac803`.
+- Lifetime-test correction, [MR577](https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/577).
+- Complete draft565: `8eb64418b7d985ad36fbb7c8026997693064458f`.
+- Callable-cache critical-section scope fix, [MR578](https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/578).
+- Parallel fixes through `e465c5cc9f31db44ac8c72c0e25b6cbb29fd5d6a`, submitted
+  separately against the draft's source branch in
+  [MR579](https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/579).
 
-## Native checks
+## Causes and corrections
 
-Ubuntu Stonking amd64; CPython 3.15.2t; GLib 2.90; GTK 4.24.1 and GTK3;
-native Pycairo; project Meson/pytest suite under Xvfb. No `PYTHON_GIL` override.
-No test assertions, existing skips or selectors were weakened by our changes.
-The upstream window-test `thread_unsafe` marker is retained as authored.
+Automatic GType registration had a check/register race; pending generated
+names are now reserved. Shared GIRepository caches are protected across
+repository operations and GType resolution. Module wrapper creation now
+rechecks and publishes its cache under the existing lock, including enums
+without a GType. Before/after reproducers expose duplicate registrations,
+repository cache double-free and distinct wrappers from concurrent lookup.
 
-| Check | Result |
-|---|---|
-| Original draft compilation | Fails: unmatched critical-section lexical scopes, `_py_cs` undeclared |
-| Scope correction | Native compilation succeeds; project pre-commit passes |
-| GTK3 serial suite | 1736 passed, 28 skipped, 8 xfailed |
-| GTK4 serial suite | 1685 passed, 79 skipped, 8 xfailed |
-| GI and Cairo import | GIL remains disabled |
-| GIL state after full GTK4 serial suite | Still disabled |
-| GTK3, eight threads | Aborts while running `test_atoms.py` |
-| GTK4, eight threads | Aborts while running `test_enum.py` |
-| Main + !577 comparison, GTK4/eight threads | Times out after 300 seconds around `test_signal.py`; normal safety GIL fallback |
+The tests also shared GLib's process-wide fatal mask, lazy C fixture types
+and native ownership lists. These resources are protected and five new
+concurrency regressions added. GTK operations stay on the main thread;
+mutable static C fixtures and volume monitors stay serial. Assertions and
+existing skips/xfails are retained; execution markers do not skip tests.
 
-The comparison is inconclusive about the cause of the parallel aborts: the
-baseline also fails to complete in this environment. Serial passes alone do
-not establish thread safety. The draft additionally retains its own locking
-TODOs. This branch must pass concurrency investigation and regression review
-before it is considered for SBI; no production or ARM64 acceptance is claimed.
+One DesktopAppInfo test launches external applications. Running it 32 times
+simultaneously filled all 50 GIO workers with D-Bus flush tasks and starved
+later async I/O, as confirmed by native debugger stacks. Only that launching
+test is serialized; the other GIO tests continue to run concurrently.
 
-The minimal !578 fix was separately compiled on the exact draft head, without
-the current-main merge or !577: original file fails, fixed file compiles.
-Its source CI has 13 successful jobs, three failures and two skipped jobs.
-Both GNOME-master jobs lack `xvfb-run`; the Python 3.15 job fails in Pycairo
-preparation on CPython's `_Py_STDC_VERSION` header warning. These failures are
-disclosed in !578; its CI workflow is unchanged.
+## Final software checks
 
-SBI continues to select the rolling packaging branch
-`codex/ubuntu-ft/3.57.1-1`, which retains CPython's normal safety GIL fallback.
-Tested SHAs above are evidence, not installation pins.
+Ubuntu Stonking amd64, actual CPython 3.15.2t, GLib 2.90, native Pycairo,
+GTK3 and GTK4.24.1, Meson/pytest under Xvfb, pytest-run-parallel 0.10.0:
+
+| Complete suite | Passed | Existing skipped | Existing xfailed |
+|---|---:|---:|---:|
+| Main integration, GTK3, 32 threads | 1741 | 28 | 8 |
+| Main integration, GTK4, 32 threads | 1690 | 79 | 8 |
+| Actual 3.57.1 quilt backport, GTK3, 8 and 32 threads | 1737 | 26 | 8 |
+| Actual 3.57.1 quilt backport, GTK4, serial and 32 threads | 1684 | 79 | 8 |
+
+All runs asserted the GIL remained disabled after the full suite, with no
+`PYTHON_GIL` override. Upstream pre-commit passed on all files. The 3.57.1
+test-parallelization prerequisites are recorded with their upstream commit
+identities in the packaging fork; quilt application and native compilation
+were checked on a fresh archive, not inferred from the main-based tests.
+
+The earlier 8020cfc1 experiment aborted or hung during parallel runs. Those
+failures were not accepted as passes; the final results above follow the
+runtime and test-fixture corrections. MR578 separately reproduces and fixes
+the draft's original `_py_cs` compilation failure. Its hosted CI has known
+missing-xvfb and Pycairo preparation failures; workflows were not weakened.
+MR579's source-only branch needs the separately submitted MR578 to compile
+on this interpreter, and the full integration results include MR577.
+
+These are amd64 source/software checks, not a complete Debian binary-package
+build, clean SBI/ARM64 installation, device or image/boot acceptance. The
+upstream draft retains other TODOs; passing these suites does not prove all
+native-library operations safe on arbitrary threads. Tested SHAs are
+evidence, not installation pins.

@@ -1,0 +1,36 @@
+Description: Keep reference-count tests meaningful on free-threaded Python
+Author: Robolightning <irobolightning@gmail.com>
+Origin: https://github.com/StableKite/pygobject
+Forwarded: no
+Last-Update: 2026-11-12
+
+--- a/tests/test_everything.py
++++ b/tests/test_everything.py
+@@ -879,7 +879,7 @@
+ 
+     def test_callback_scope_async(self):
+         TestCallbacks.called = False
+-        ud = "Test Value 44"
++        ud = "".join(("Test Value", " 44"))
+ 
+         def callback(user_data):
+             self.assertEqual(user_data, ud)
+@@ -1094,7 +1094,7 @@
+ 
+     def test_callback_scope_notified_with_destroy(self):
+         TestCallbacks.called = 0
+-        ud = "Test scope notified data 33"
++        ud = "".join(("Test scope notified", " data 33"))
+ 
+         def callback(user_data):
+             self.assertEqual(user_data, ud)
+--- a/tests/test_properties.py
++++ b/tests/test_properties.py
+@@ -949,6 +949,7 @@
+         # the local reference to this object, its reference count shoud
+         # drop to zero, and our dummy object should loose one reference.
+         del t
++        gc.collect()  # FT reference counting may defer finalization.
+         self.assertEqual(sys.getrefcount(o), rc)
+ 
+     def test_doc_strings(self):

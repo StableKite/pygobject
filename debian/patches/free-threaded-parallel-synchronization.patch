@@ -168,25 +168,33 @@ index 0246fea4..ace8d41a 100644
      implementor_class = g_type_class_ref (implementor_gtype);
      if (is_interface) {
 diff --git a/gi/module.py b/gi/module.py
-index 9663cf81..e2161271 100644
+index 9663cf81..f75ae0bc 100644
 --- a/gi/module.py
 +++ b/gi/module.py
-@@ -123,9 +123,10 @@ class IntrospectionModule(ModuleType):
+@@ -123,9 +123,14 @@ class IntrospectionModule(ModuleType):
              raise AttributeError(f"{self.__name__!r} object has no attribute {name!r}")
  
          if isinstance(info, EnumInfo):
 -            g_type = info.get_g_type()
 -
              with self._lock:
++                # Another caller may have populated the module while we waited.
++                # Enums without a GType cannot use g_type.pytype as their cache.
++                if name in self.__dict__:
++                    return self.__dict__[name]
 +                # Resolving the GType may run its C registration function.
 +                # Serialize that first use along with creation of the wrapper.
 +                g_type = info.get_g_type()
                  wrapper = g_type.pytype
  
                  if wrapper is None:
-@@ -142,7 +143,8 @@ class IntrospectionModule(ModuleType):
+@@ -141,8 +146,12 @@ class IntrospectionModule(ModuleType):
+                 if g_type != TYPE_NONE:
                      g_type.pytype = wrapper
  
++                self.__dict__[name] = wrapper
++                return wrapper
++
          elif isinstance(info, RegisteredTypeInfo):
 -            g_type = info.get_g_type()
 +            with self._lock:
@@ -194,6 +202,25 @@ index 9663cf81..e2161271 100644
  
              # Create a wrapper.
              if isinstance(info, ObjectInfo):
+@@ -178,6 +187,8 @@ class IntrospectionModule(ModuleType):
+                 raise NotImplementedError(info)
+ 
+             with self._lock:
++                if name in self.__dict__:
++                    return self.__dict__[name]
+                 # Check if there is already a Python wrapper that is not a parent class
+                 # of the wrapper being created. If it is a parent, it is ok to clobber
+                 # g_type.pytype with a new child class wrapper of the existing parent.
+@@ -200,6 +211,9 @@ class IntrospectionModule(ModuleType):
+                 if g_type != TYPE_NONE:
+                     g_type.pytype = wrapper
+ 
++                self.__dict__[name] = wrapper
++                return wrapper
++
+         elif isinstance(info, FunctionInfo):
+             wrapper = info
+         elif isinstance(info, ConstantInfo):
 diff --git a/gi/pygenum.c b/gi/pygenum.c
 index a9396189..2fa921aa 100644
 --- a/gi/pygenum.c
@@ -860,6 +887,18 @@ index 146f7240..e4a3c59b 100644
      def test_out_array(self):
          a_selection = Gdk.Atom.intern("my_clipboard", False)
          clipboard = Gtk.Clipboard.get(a_selection)
+diff --git a/tests/test_cairo.py b/tests/test_cairo.py
+index 83508686..3fc712e3 100644
+--- a/tests/test_cairo.py
++++ b/tests/test_cairo.py
+@@ -233,6 +233,7 @@ class TestRegion(unittest.TestCase):
+ 
+ @unittest.skipUnless(has_cairo, "built without cairo support")
+ @unittest.skipUnless(Gtk, "Gtk not available")
++@pytest.mark.thread_unsafe  # GTK widgets must stay on the main thread.
+ class TestPango(unittest.TestCase):
+     def test_cairo_font_options(self):
+         window = Gtk.Window()
 diff --git a/tests/test_enum.py b/tests/test_enum.py
 index 5eee30c6..2b9197d1 100644
 --- a/tests/test_enum.py
@@ -1058,10 +1097,10 @@ index 1dd10b14..cc623419 100644
  import gi.overrides
 diff --git a/tests/test_threading.py b/tests/test_threading.py
 new file mode 100644
-index 00000000..ea66a9b1
+index 00000000..fcc556a6
 --- /dev/null
 +++ b/tests/test_threading.py
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,100 @@
 +from concurrent.futures import ThreadPoolExecutor
 +import threading
 +
@@ -1069,6 +1108,24 @@ index 00000000..ea66a9b1
 +import testhelper
 +
 +from gi.repository import GObject
++from gi.module import IntrospectionModule
++
++
++@pytest.mark.thread_unsafe(reason="starts its own synchronized worker threads")
++def test_concurrent_unregistered_enum_wrapper():
++    """A cold enum without a GType still has one wrapper per module."""
++    module = IntrospectionModule("GIMarshallingTests")
++    barrier = threading.Barrier(8)
++
++    def resolve(_):
++        barrier.wait(timeout=10)
++        return module.NoTypeFlags
++
++    with ThreadPoolExecutor(max_workers=8) as pool:
++        wrappers = list(pool.map(resolve, range(8)))
++    assert all(wrapper is wrappers[0] for wrapper in wrappers)
++    assert module.NoTypeFlags is wrappers[0]
++    assert isinstance(module.NoTypeFlags.VALUE1, wrappers[0])
 +
 +
 +@pytest.mark.thread_unsafe(reason="starts its own synchronized worker threads")

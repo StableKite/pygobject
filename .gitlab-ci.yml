@@ -147,7 +147,7 @@ gnome-master:
   image:
     name: quay.io/gnome_infrastructure/gnome-runtime-images:gnome-master
     docker:
-      user: root
+      user: "0:1000"
   tags:
     - flatpak
   parallel:
@@ -161,7 +161,7 @@ gnome-master:
   before_script:
     - dnf install --assumeyes xorg-x11-server-Xvfb
   script:
-    - runuser --user build -- bash -x ./.gitlab-ci/test-flatpak.sh
+    - setpriv --reuid=build --keep-groups env HOME="$(getent passwd build | cut -d: -f6)" bash -x ./.gitlab-ci/test-flatpak.sh
 
 linux-pdm:
   stage: build

@@ -14,14 +14,15 @@ typedef enum { TEST_THREAD_A, TEST_THREAD_B } ThreadEnumType;
 static GType
 test_thread_enum_get_type (void)
 {
-    static GType enum_type = 0;
+    static gsize enum_type = 0;
     static GEnumValue enum_values[] = {
         { TEST_THREAD_A, "TEST_THREAD_A", "a as in apple" },
         { 0, NULL, NULL },
     };
 
-    if (!enum_type) {
-        enum_type = g_enum_register_static ("TestThreadEnum", enum_values);
+    if (g_once_init_enter (&enum_type)) {
+        GType gtype = g_enum_register_static ("TestThreadEnum", enum_values);
+        g_once_init_leave (&enum_type, gtype);
     }
     return enum_type;
 }

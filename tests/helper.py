@@ -4,12 +4,16 @@ import inspect
 import warnings
 import functools
 import sys
+import threading
 from collections import namedtuple
 from io import StringIO
 
 import gi
 from gi import PyGIDeprecationWarning
 from gi.repository import GLib
+
+
+_glib_log_lock = threading.RLock()
 
 
 ExceptionInfo = namedtuple("ExceptionInfo", ["type", "value", "traceback"])
@@ -72,23 +76,27 @@ def capture_glib_warnings(allow_warnings=False, allow_criticals=False):
     by default. Setting allow_warnings and allow_criticals will temporarily
     allow warnings or criticals without terminating the test run.
     """
-    old_mask = GLib.log_set_always_fatal(GLib.LogLevelFlags(0))
+    # The fatal mask is process-wide. Hold the lock through the captured code
+    # so another thread cannot restore fatal errors while it is still running.
+    # A recursive lock also preserves nested captures in the same thread.
+    with _glib_log_lock:
+        old_mask = GLib.log_set_always_fatal(GLib.LogLevelFlags(0))
 
-    new_mask = old_mask
-    if allow_warnings:
-        new_mask &= ~GLib.LogLevelFlags.LEVEL_WARNING
-    if allow_criticals:
-        new_mask &= ~GLib.LogLevelFlags.LEVEL_CRITICAL
+        new_mask = old_mask
+        if allow_warnings:
+            new_mask &= ~GLib.LogLevelFlags.LEVEL_WARNING
+        if allow_criticals:
+            new_mask &= ~GLib.LogLevelFlags.LEVEL_CRITICAL
 
-    GLib.log_set_always_fatal(GLib.LogLevelFlags(new_mask))
+        GLib.log_set_always_fatal(GLib.LogLevelFlags(new_mask))
 
-    GLibWarning = gi._gi.Warning
-    try:
-        with warnings.catch_warnings(record=True) as warn:
-            warnings.filterwarnings("always", category=GLibWarning)
-            yield warn
-    finally:
-        GLib.log_set_always_fatal(old_mask)
+        GLibWarning = gi._gi.Warning
+        try:
+            with warnings.catch_warnings(record=True) as warn:
+                warnings.filterwarnings("always", category=GLibWarning)
+                yield warn
+        finally:
+            GLib.log_set_always_fatal(old_mask)
 
 
 @contextlib.contextmanager

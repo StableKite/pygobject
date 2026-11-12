@@ -6,6 +6,11 @@ import warnings
 
 import pytest
 
+
+# GTK widgets and their models must stay on the thread that initialized GTK.
+# These tests still run in full when pytest-run-parallel is enabled.
+pytestmark = pytest.mark.thread_unsafe(reason="GTK requires its main thread")
+
 from .helper import ignore_gi_deprecation_warnings, capture_glib_warnings
 
 import gi.overrides

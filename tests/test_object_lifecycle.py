@@ -184,6 +184,7 @@ with warnings.catch_warnings():
 
 def test_class_with_slots_raises_warning():
     with warnings.catch_warnings(record=True) as warn:
+        warnings.simplefilter("always", PyGIWarning)
 
         class _SlotClass(GObject.Object):
             __slots__ = ["py_int"]
@@ -197,6 +198,7 @@ def test_subclass_with_slots_raises_warning():
         pass
 
     with warnings.catch_warnings(record=True) as warn:
+        warnings.simplefilter("always", PyGIWarning)
 
         class _SlotClass(BaseClass):
             __slots__ = ["py_int"]

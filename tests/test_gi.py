@@ -1326,11 +1326,13 @@ class TestGArray(unittest.TestCase):
     def test_garray_int_none_return(self):
         self.assertEqual([-1, 0, 1, 2], GIMarshallingTests.garray_int_none_return())
 
+    @pytest.mark.thread_unsafe(reason="C fixture lazily fills one shared GArray")
     def test_garray_uint64_none_return(self):
         self.assertEqual(
             [0, GLib.MAXUINT64], GIMarshallingTests.garray_uint64_none_return()
         )
 
+    @pytest.mark.thread_unsafe(reason="C fixture lazily fills one shared GArray")
     def test_garray_enum_none_return(self):
         self.assertEqual(
             [
@@ -1590,6 +1592,7 @@ class TestGList(unittest.TestCase):
     def test_glist_utf8_none_in(self):
         GIMarshallingTests.glist_utf8_none_in(Sequence(("0", "1", "2")))
 
+    @pytest.mark.thread_unsafe(reason="C fixture lazily builds one shared GList")
     def test_glist_utf8_none_out(self):
         self.assertEqual(["0", "1", "2"], GIMarshallingTests.glist_utf8_none_out())
 
@@ -1660,6 +1663,7 @@ class TestGSList(unittest.TestCase):
     def test_gslist_utf8_none_in(self):
         GIMarshallingTests.gslist_utf8_none_in(Sequence(("0", "1", "2")))
 
+    @pytest.mark.thread_unsafe(reason="C fixture lazily builds one shared GSList")
     def test_gslist_utf8_none_out(self):
         self.assertEqual(["0", "1", "2"], GIMarshallingTests.gslist_utf8_none_out())
 
@@ -1830,6 +1834,7 @@ class TestGHashTable(unittest.TestCase):
 
 
 class TestGValue(unittest.TestCase):
+    @pytest.mark.thread_unsafe(reason="C fixture initializes a shared GValue")
     def test_gvalue_return(self):
         self.assertEqual(42, GIMarshallingTests.gvalue_return())
 
@@ -1873,9 +1878,11 @@ class TestGValue(unittest.TestCase):
         with pytest.raises(TypeError):
             v2.get_value()
 
+    @pytest.mark.thread_unsafe(reason="C fixture initializes a shared GValue")
     def test_gvalue_out(self):
         self.assertEqual(42, GIMarshallingTests.gvalue_out())
 
+    @pytest.mark.thread_unsafe(reason="C fixture initializes a shared GValue")
     def test_gvalue_int64_out(self):
         self.assertEqual(GLib.MAXINT64, GIMarshallingTests.gvalue_int64_out())
 

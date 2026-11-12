@@ -355,6 +355,7 @@ class TestEverything(unittest.TestCase):
         self.assertAlmostEqual(two, 5.0)
         self.assertAlmostEqual(three, 7.5)
 
+    @pytest.mark.thread_unsafe(reason="C fixture overwrites one global GValue")
     def test_value(self):
         self.assertEqual(Everything.test_int_value_arg(GLib.MAXINT), GLib.MAXINT)
         self.assertEqual(Everything.test_value_return(GLib.MAXINT), GLib.MAXINT)
@@ -660,6 +661,7 @@ class TestEverything(unittest.TestCase):
     def test_strv_in(self):
         Everything.test_strv_in(["1", "2", "3"])
 
+    @pytest.mark.thread_unsafe(reason="C fixture lazily builds one shared GList")
     def test_glist(self):
         self.assertEqual(Everything.test_glist_nothing_return(), ["1", "2", "3"])
         self.assertEqual(Everything.test_glist_nothing_return2(), ["1", "2", "3"])

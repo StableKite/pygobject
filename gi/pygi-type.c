@@ -716,6 +716,18 @@ pyg_flags_get_value (GType flag_type, PyObject *obj, guint *val)
 static GQuark pyg_type_marshal_key = 0;
 static GQuark pyg_type_marshal_helper_key = 0;
 
+static GOnce once_marshal_quarks = G_ONCE_INIT;
+
+static gpointer
+init_once_marshal_quarks (gpointer user_data)
+{
+    pyg_type_marshal_key = g_quark_from_static_string ("PyGType::marshal");
+    pyg_type_marshal_helper_key =
+        g_quark_from_static_string ("PyGType::marshal-helper");
+
+    return NULL;
+}
+
 typedef enum _marshal_helper_data_e marshal_helper_data_e;
 enum _marshal_helper_data_e {
     MARSHAL_HELPER_NONE = 0,
@@ -768,18 +780,13 @@ pyg_type_lookup (GType type)
  * fundamental types, you may use this function to register conversion
  * handlers.
  */
-
 void
 pyg_register_gtype_custom (GType gtype, fromvaluefunc from_func,
                            tovaluefunc to_func)
 {
     PyGTypeMarshal *tm;
 
-    if (!pyg_type_marshal_key) {
-        pyg_type_marshal_key = g_quark_from_static_string ("PyGType::marshal");
-        pyg_type_marshal_helper_key =
-            g_quark_from_static_string ("PyGType::marshal-helper");
-    }
+    g_once (&once_marshal_quarks, init_once_marshal_quarks, NULL);
 
     tm = g_new (PyGTypeMarshal, 1);
     tm->fromvalue = from_func;
@@ -1030,6 +1037,18 @@ pyg_signal_class_closure_marshal (GClosure *closure, GValue *return_value,
     PyGILState_Release (state);
 }
 
+static gpointer
+init_once_closure (gpointer user_data)
+{
+    GClosure *closure = g_closure_new_simple (sizeof (GClosure), NULL);
+    g_closure_set_marshal (closure, pyg_signal_class_closure_marshal);
+
+    g_closure_ref (closure);
+    g_closure_sink (closure);
+
+    return closure;
+}
+
 /**
  * pyg_signal_class_closure_get:
  *
@@ -1042,16 +1061,11 @@ pyg_signal_class_closure_marshal (GClosure *closure, GValue *return_value,
 GClosure *
 pyg_signal_class_closure_get (void)
 {
-    static GClosure *closure;
+    static GOnce once_closure = G_ONCE_INIT;
 
-    if (closure == NULL) {
-        closure = g_closure_new_simple (sizeof (GClosure), NULL);
-        g_closure_set_marshal (closure, pyg_signal_class_closure_marshal);
+    g_once (&once_closure, init_once_closure, NULL);
 
-        g_closure_ref (closure);
-        g_closure_sink (closure);
-    }
-    return closure;
+    return once_closure.retval;
 }
 
 /* ----- __doc__ descriptor for GObject and GInterface ----- */
@@ -1203,6 +1217,15 @@ object_doc_descr_get (PyObject *self, PyObject *obj, PyObject *type)
 
 PYGI_DEFINE_TYPE ("gobject.GObject.__doc__", PyGObjectDoc_Type, PyObject);
 
+static gpointer
+init_once_doc_descr (gpointer user_data)
+{
+    Py_SET_TYPE (&PyGObjectDoc_Type, &PyType_Type);
+    if (PyType_Ready (&PyGObjectDoc_Type)) return NULL;
+
+    return PyObject_New (PyObject, &PyGObjectDoc_Type);
+}
+
 /**
  * pyg_object_descr_doc_get:
  *
@@ -1215,16 +1238,11 @@ PYGI_DEFINE_TYPE ("gobject.GObject.__doc__", PyGObjectDoc_Type, PyObject);
 PyObject *
 pyg_object_descr_doc_get (void)
 {
-    static PyObject *doc_descr = NULL;
+    static GOnce once_doc_descr = G_ONCE_INIT;
 
-    if (!doc_descr) {
-        Py_SET_TYPE (&PyGObjectDoc_Type, &PyType_Type);
-        if (PyType_Ready (&PyGObjectDoc_Type)) return NULL;
+    g_once (&once_doc_descr, init_once_doc_descr, NULL);
 
-        doc_descr = PyObject_New (PyObject, &PyGObjectDoc_Type);
-        if (doc_descr == NULL) return NULL;
-    }
-    return doc_descr;
+    return once_doc_descr.retval;
 }
 
 

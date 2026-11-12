@@ -4,33 +4,37 @@ Origin: https://github.com/StableKite/pygobject
 Forwarded: https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/577
 Last-Update: 2026-11-12
 
+diff --git a/tests/test_everything.py b/tests/test_everything.py
+index 95cb948f..09f2fb84 100644
 --- a/tests/test_everything.py
 +++ b/tests/test_everything.py
-@@ -879,7 +879,7 @@
- 
+@@ -884,7 +884,7 @@ class TestCallbacks(unittest.TestCase):
+     @pytest.mark.thread_unsafe  # uses refcount
      def test_callback_scope_async(self):
-         TestCallbacks.called = False
+         called = False
 -        ud = "Test Value 44"
 +        ud = "".join(("Test Value", " 44"))
  
          def callback(user_data):
-             self.assertEqual(user_data, ud)
-@@ -1094,7 +1094,7 @@
- 
+             nonlocal called
+@@ -1109,7 +1109,7 @@ class TestCallbacks(unittest.TestCase):
+     @pytest.mark.thread_unsafe
      def test_callback_scope_notified_with_destroy(self):
-         TestCallbacks.called = 0
+         called = 0
 -        ud = "Test scope notified data 33"
 +        ud = "".join(("Test scope notified", " data 33"))
  
          def callback(user_data):
-             self.assertEqual(user_data, ud)
+             nonlocal called
+diff --git a/tests/test_properties.py b/tests/test_properties.py
+index 03b47ec0..8faaed3a 100644
 --- a/tests/test_properties.py
 +++ b/tests/test_properties.py
-@@ -949,6 +949,7 @@
+@@ -949,6 +949,7 @@ class TestProperty(unittest.TestCase):
          # the local reference to this object, its reference count shoud
          # drop to zero, and our dummy object should loose one reference.
          del t
-+        gc.collect()  # FT reference counting may defer finalization.
++        gc.collect()  # Free-threaded reference counting may defer finalization.
          self.assertEqual(sys.getrefcount(o), rc)
  
      def test_doc_strings(self):

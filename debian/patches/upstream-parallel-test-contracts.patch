@@ -1,0 +1,3399 @@
+Description: Backport upstream parallel-test contracts for 3.57.1
+Author: Arjan and upstream PyGObject contributors
+Origin: upstream commits 72a73526, 9ab089c3, 14d90677, ade823a6, aa2a4726,
+ 329c5d7a, 926a1d70, abcc4f4e, 3421740b, 2a6d77e9
+Forwarded: not-needed, already upstream
+Last-Update: 2026-11-12
+ .
+ The hunk for test_builder.py is omitted because that file was introduced
+ after 3.57.1. Existing tests and assertions are retained.
+
+diff --git a/tests/conftest.py b/tests/conftest.py
+index f9a9e8b6..d19f969c 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -59,6 +59,10 @@ def dbus_launch_session():
+ 
+ 
+ def pytest_configure(config):
++    config.addinivalue_line(
++        "markers", "thread_unsafe: mark the test function as single-threaded"
++    )
++
+     pid, addr = dbus_launch_session()
+     if pid >= 0:
+         os.environ["DBUS_SESSION_BUS_ADDRESS"] = addr
+diff --git a/tests/test_async.py b/tests/test_async.py
+index 5abf5b76..bf63c515 100644
+--- a/tests/test_async.py
++++ b/tests/test_async.py
+@@ -11,6 +11,7 @@ from gi.repository import GLib, Gio
+ from gi.events import GLibEventLoopPolicy
+ 
+ 
++@pytest.mark.thread_unsafe
+ class TestAsync(unittest.TestCase):
+     def setUp(self):
+         policy = GLibEventLoopPolicy()
+diff --git a/tests/test_atoms.py b/tests/test_atoms.py
+index bc4e05c2..146f7240 100644
+--- a/tests/test_atoms.py
++++ b/tests/test_atoms.py
+@@ -1,6 +1,8 @@
+ import os
+ import unittest
+ 
++import pytest
++
+ try:
+     from gi.repository import Gtk, Gdk
+ except ImportError:
+@@ -45,6 +47,7 @@ class TestGdkAtom(unittest.TestCase):
+         )
+ 
+     @unittest.skipUnless(os.name != "nt", "not on Windows")
++    @pytest.mark.thread_unsafe  # clipboard
+     def test_in_single(self):
+         a_selection = Gdk.Atom.intern("test_clipboard", False)
+         clipboard = Gtk.Clipboard.get(a_selection)
+diff --git a/tests/test_callback.py b/tests/test_callback.py
+index bc6b7921..c36536a4 100644
+--- a/tests/test_callback.py
++++ b/tests/test_callback.py
+@@ -1,3 +1,5 @@
++import pytest
++
+ from gi.repository import GLib, Gio, Regress
+ 
+ 
+@@ -7,6 +9,7 @@ def iteration():
+         ctx.iteration(False)
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_async_callback():
+     result = []
+     cancel = Gio.Cancellable()
+@@ -23,6 +26,7 @@ def test_async_callback():
+     assert result == [True]
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_async_callback_with_extra_callbacks():
+     result = []
+ 
+@@ -38,6 +42,7 @@ def test_async_callback_with_extra_callbacks():
+     assert result == [(True, True, None)]
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_async_callback_with_extra_callbacks_filled_in():
+     result = []
+     cancel = Gio.Cancellable()
+@@ -58,6 +63,7 @@ def test_async_callback_with_extra_callbacks_filled_in():
+     assert result == ["test_cb data", (True, True, None)]
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_async_callback_with_extra_callbacks_as_kwarg():
+     result = []
+     cancel = Gio.Cancellable()
+@@ -80,6 +86,7 @@ def test_async_callback_with_extra_callbacks_as_kwarg():
+     assert result == [None, (True, True, None)]
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_async_callback_with_extra_callbacks_as_kwarg_and_user_data():
+     result = []
+     cancel = Gio.Cancellable()
+diff --git a/tests/test_docstring.py b/tests/test_docstring.py
+index b7a2ef23..1ff11319 100644
+--- a/tests/test_docstring.py
++++ b/tests/test_docstring.py
+@@ -1,5 +1,7 @@
+ import unittest
+ 
++import pytest
++
+ import gi.docstring
+ 
+ from gi.repository import Regress
+@@ -14,6 +16,7 @@ except ImportError:
+ 
+ 
+ class Test(unittest.TestCase):
++    @pytest.mark.thread_unsafe
+     def test_api(self):
+         def new_func(info):
+             return "docstring test"
+diff --git a/tests/test_enum.py b/tests/test_enum.py
+index 62affdab..5eee30c6 100644
+--- a/tests/test_enum.py
++++ b/tests/test_enum.py
+@@ -21,13 +21,15 @@ def get_id():
+         return counter
+ 
+ 
++class MyEnum(GObject.GEnum):
++    ONE = 1
++    TWO = 2
++    THREE = 3
++    FORTY_TWO = 42
++
++
+ class EnumTests(unittest.TestCase):
+     def test_gtype(self):
+-        class MyEnum(GObject.GEnum):
+-            ONE = 1
+-            TWO = 2
+-            THREE = 3
+-
+         # The new enum has it's own GType, which subclasses GEnum
+         self.assertIsInstance(MyEnum.__gtype__, GObject.GType)
+         self.assertNotEqual(MyEnum.__gtype__, GObject.GEnum.__gtype__)
+@@ -44,10 +46,6 @@ class EnumTests(unittest.TestCase):
+         self.assertIs(MyEnum.__gtype__.pytype, MyEnum)
+ 
+     def test_values(self):
+-        class MyEnum(GObject.GEnum):
+-            ONE = 1
+-            FORTY_TWO = 42
+-
+         # As this is a stdlib enum, the enum values are subclasses of the enum
+         self.assertIsInstance(MyEnum.ONE, MyEnum)
+         self.assertIsInstance(MyEnum.FORTY_TWO, MyEnum)
+@@ -90,13 +88,15 @@ class EnumTests(unittest.TestCase):
+         assert box.props.orientation == Gtk.Orientation.VERTICAL
+ 
+ 
++class MyFlags(GObject.GFlags):
++    ONE = 1
++    TWO = 2
++    FOUR = 4
++    THIRTY_TWO = 32
++
++
+ class FlagsTests(unittest.TestCase):
+     def test_gtype(self):
+-        class MyFlags(GObject.GFlags):
+-            ONE = 1
+-            TWO = 2
+-            FOUR = 4
+-
+         # The new enum has it's own GType, which subclasses GFlags
+         self.assertIsInstance(MyFlags.__gtype__, GObject.GType)
+         self.assertNotEqual(MyFlags.__gtype__, GObject.GFlags.__gtype__)
+@@ -113,10 +113,6 @@ class FlagsTests(unittest.TestCase):
+         self.assertIs(MyFlags.__gtype__.pytype, MyFlags)
+ 
+     def test_values(self):
+-        class MyFlags(GObject.GFlags):
+-            ONE = 1
+-            THIRTY_TWO = 32
+-
+         # As this is a stdlib enum, the enum values are subclasses of the enum
+         self.assertIsInstance(MyFlags.ONE, MyFlags)
+         self.assertIsInstance(MyFlags.THIRTY_TWO, MyFlags)
+diff --git a/tests/test_events.py b/tests/test_events.py
+index 9351a947..b5f5aceb 100644
+--- a/tests/test_events.py
++++ b/tests/test_events.py
+@@ -73,6 +73,7 @@ except ImportError:
+ GTK4 = Gtk and Gtk._version == "4.0"
+ 
+ 
++@pytest.mark.thread_unsafe
+ class GLibEventLoopTests(GLibEventLoopTestsMixin, TestCase):
+     def __init__(self, *args):
+         super().__init__(*args)
+@@ -99,6 +100,7 @@ class GLibEventLoopTests(GLibEventLoopTestsMixin, TestCase):
+         return loop
+ 
+ 
++@pytest.mark.thread_unsafe
+ class SubprocessWatcherTests(SubprocessMixin, TestCase):
+     def setUp(self):
+         super().setUp()
+@@ -127,6 +129,7 @@ class SubprocessWatcherTests(SubprocessMixin, TestCase):
+         )
+ 
+ 
++@pytest.mark.thread_unsafe
+ class GLibEventLoopPolicyTests(unittest.TestCase):
+     def create_policy(self):
+         return gi.events.GLibEventLoopPolicy()
+diff --git a/tests/test_everything.py b/tests/test_everything.py
+index 763be3db..95cb948f 100644
+--- a/tests/test_everything.py
++++ b/tests/test_everything.py
+@@ -507,6 +507,9 @@ class TestEverything(unittest.TestCase):
+                 e.args, ("Regress.test_int8() takes exactly 1 argument (0 given)",)
+             )
+ 
++    class ARegisteredClass(GObject.GObject):
++        __gtype_name__ = "EverythingTestsARegisteredClass"
++
+     def test_gtypes(self):
+         gchararray_gtype = GObject.type_from_name("gchararray")
+         gtype = Everything.test_gtype(str)
+@@ -525,13 +528,10 @@ class TestEverything(unittest.TestCase):
+ 
+         self.assertRaises(TypeError, Everything.test_gtype, NotARegisteredClass)
+ 
+-        class ARegisteredClass(GObject.GObject):
+-            __gtype_name__ = "EverythingTestsARegisteredClass"
+-
+         gtype = Everything.test_gtype("EverythingTestsARegisteredClass")
+-        self.assertEqual(ARegisteredClass.__gtype__, gtype)
+-        gtype = Everything.test_gtype(ARegisteredClass)
+-        self.assertEqual(ARegisteredClass.__gtype__, gtype)
++        self.assertEqual(TestEverything.ARegisteredClass.__gtype__, gtype)
++        gtype = Everything.test_gtype(TestEverything.ARegisteredClass)
++        self.assertEqual(TestEverything.ARegisteredClass.__gtype__, gtype)
+         self.assertRaises(TypeError, Everything.test_gtype, "ARegisteredClass")
+ 
+     def test_dir(self):
+@@ -614,16 +614,17 @@ class TestEverything(unittest.TestCase):
+             Everything.test_array_of_non_utf8_strings()
+ 
+     def test_array_callback(self):
+-        TestCallbacks.called = 0
++        called = 0
+ 
+         def callback(ints, ints_length, strings, strings_length):
++            nonlocal called
+             self.assertEqual(ints, [-1, 0, 1, 2])
+             self.assertEqual(strings, ["one", "two", "three"])
+-            TestCallbacks.called += 1
+-            return TestCallbacks.called
++            called += 1
++            return called
+ 
+         Everything.test_array_callback(callback)
+-        self.assertEqual(TestCallbacks.called, 2)
++        self.assertEqual(called, 2)
+ 
+     def test_garray_container_return(self):
+         # GPtrArray transfer container
+@@ -673,6 +674,7 @@ class TestEverything(unittest.TestCase):
+             [Everything.TestObj, Everything.TestSubObj]
+         )
+ 
++    @pytest.mark.thread_unsafe
+     def test_gslist(self):
+         self.assertEqual(Everything.test_gslist_nothing_return(), ["1", "2", "3"])
+         self.assertEqual(Everything.test_gslist_nothing_return2(), ["1", "2", "3"])
+@@ -682,6 +684,7 @@ class TestEverything(unittest.TestCase):
+         Everything.test_gslist_nothing_in(["1", "2", "3"])
+         Everything.test_gslist_nothing_in2(["1", "2", "3"])
+ 
++    @pytest.mark.thread_unsafe
+     def test_hash_return(self):
+         expected = {"foo": "bar", "baz": "bat", "qux": "quux"}
+ 
+@@ -816,18 +819,17 @@ class TestNullableArgs(unittest.TestCase):
+ 
+ 
+ class TestCallbacks(unittest.TestCase):
+-    called = False
+-    main_loop = GLib.MainLoop()
+-
+     def test_callback(self):
+-        TestCallbacks.called = False
++        called = False
+ 
+         def callback():
+-            TestCallbacks.called = True
++            nonlocal called
++            called = True
+ 
+         Everything.test_simple_callback(callback)
+-        self.assertTrue(TestCallbacks.called)
++        self.assertTrue(called)
+ 
++    @pytest.mark.thread_unsafe  # uses capture_exceptions()
+     def test_callback_exception(self):
+         """This test ensures that we get errors from callbacks correctly
+         and in particular that we do not segv when callbacks fail.
+@@ -845,6 +847,7 @@ class TestCallbacks(unittest.TestCase):
+         self.assertTrue(exc)
+         self.assertEqual(exc[0].type, ZeroDivisionError)
+ 
++    @pytest.mark.thread_unsafe  # uses capture_exceptions()
+     def test_double_callback_exception(self):
+         """This test ensures that we get errors from callbacks correctly
+         and in particular that we do not segv when callbacks fail.
+@@ -868,22 +871,25 @@ class TestCallbacks(unittest.TestCase):
+         self.assertEqual(exc[0].type, ZeroDivisionError)
+ 
+     def test_return_value_callback(self):
+-        TestCallbacks.called = False
++        called = False
+ 
+         def callback():
+-            TestCallbacks.called = True
++            nonlocal called
++            called = True
+             return 44
+ 
+         self.assertEqual(Everything.test_callback(callback), 44)
+-        self.assertTrue(TestCallbacks.called)
++        self.assertTrue(called)
+ 
++    @pytest.mark.thread_unsafe  # uses refcount
+     def test_callback_scope_async(self):
+-        TestCallbacks.called = False
++        called = False
+         ud = "Test Value 44"
+ 
+         def callback(user_data):
++            nonlocal called
+             self.assertEqual(user_data, ud)
+-            TestCallbacks.called = True
++            called = True
+             return 44
+ 
+         if hasattr(sys, "getrefcount"):
+@@ -892,7 +898,7 @@ class TestCallbacks(unittest.TestCase):
+ 
+         self.assertEqual(Everything.test_callback_async(callback, ud), None)
+         # Callback should not have run and the ref count is increased by 1
+-        self.assertEqual(TestCallbacks.called, False)
++        self.assertEqual(called, False)
+ 
+         if hasattr(sys, "getrefcount"):
+             self.assertEqual(sys.getrefcount(callback), callback_refcount + 1)
+@@ -901,7 +907,7 @@ class TestCallbacks(unittest.TestCase):
+         # test_callback_thaw_async will run the callback previously supplied.
+         # references should be auto decremented after this call.
+         self.assertEqual(Everything.test_callback_thaw_async(), 44)
+-        self.assertTrue(TestCallbacks.called)
++        self.assertTrue(called)
+ 
+         # Make sure refcounts are returned to normal
+         if hasattr(sys, "getrefcount"):
+@@ -911,18 +917,19 @@ class TestCallbacks(unittest.TestCase):
+     def test_callback_scope_call_multi(self):
+         # This tests a callback that gets called multiple times from a
+         # single scope call in python.
+-        TestCallbacks.called = 0
++        called = 0
+ 
+         def callback():
+-            TestCallbacks.called += 1
+-            return TestCallbacks.called
++            nonlocal called
++            called += 1
++            return called
+ 
+         if hasattr(sys, "getrefcount"):
+             refcount = sys.getrefcount(callback)
+         result = Everything.test_multi_callback(callback)
+         # first callback should give 1, second 2, and the function sums them up
+         self.assertEqual(result, 3)
+-        self.assertEqual(TestCallbacks.called, 2)
++        self.assertEqual(called, 2)
+ 
+         if hasattr(sys, "getrefcount"):
+             self.assertEqual(sys.getrefcount(callback), refcount)
+@@ -930,22 +937,20 @@ class TestCallbacks(unittest.TestCase):
+     def test_callback_scope_call_array(self):
+         # This tests a callback that gets called multiple times from a
+         # single scope call in python with array arguments
+-        TestCallbacks.callargs = []
++        callargs = []
+ 
+         # FIXME: would be cleaner without the explicit length args:
+         # def callback(one, two):
+         def callback(one, one_length, two, two_length):
+-            TestCallbacks.callargs.append((one, two))
+-            return len(TestCallbacks.callargs)
++            callargs.append((one, two))
++            return len(callargs)
+ 
+         if hasattr(sys, "getrefcount"):
+             refcount = sys.getrefcount(callback)
+         result = Everything.test_array_callback(callback)
+         # first callback should give 1, second 2, and the function sums them up
+         self.assertEqual(result, 3)
+-        self.assertEqual(
+-            TestCallbacks.callargs, [([-1, 0, 1, 2], ["one", "two", "three"])] * 2
+-        )
++        self.assertEqual(callargs, [([-1, 0, 1, 2], ["one", "two", "three"])] * 2)
+ 
+         if hasattr(sys, "getrefcount"):
+             self.assertEqual(sys.getrefcount(callback), refcount)
+@@ -953,78 +958,82 @@ class TestCallbacks(unittest.TestCase):
+     def test_callback_scope_call_array_inout(self):
+         # This tests a callback that gets called multiple times from a
+         # single scope call in python with inout array arguments
+-        TestCallbacks.callargs = []
++        callargs = []
+ 
+         def callback(ints, ints_length):
+-            TestCallbacks.callargs.append(ints)
++            callargs.append(ints)
+             return ints[1:], len(ints[1:])
+ 
+         if hasattr(sys, "getrefcount"):
+             refcount = sys.getrefcount(callback)
+         result = Everything.test_array_inout_callback(callback)
+-        self.assertEqual(TestCallbacks.callargs, [[-2, -1, 0, 1, 2], [-1, 0, 1, 2]])
++        self.assertEqual(callargs, [[-2, -1, 0, 1, 2], [-1, 0, 1, 2]])
+         # first callback should give 4, second 3
+         self.assertEqual(result, 3)
+         if hasattr(sys, "getrefcount"):
+             self.assertEqual(sys.getrefcount(callback), refcount)
+ 
+     def test_callback_userdata(self):
+-        TestCallbacks.called = 0
++        called = 0
+ 
+         def callback(userdata):
+-            self.assertEqual(userdata, f"Test{TestCallbacks.called:d}")
+-            TestCallbacks.called += 1
+-            return TestCallbacks.called
++            nonlocal called
++            self.assertEqual(userdata, f"Test{called:d}")
++            called += 1
++            return called
+ 
+         for i in range(100):
+             val = Everything.test_callback_user_data(callback, f"Test{i:d}")
+             self.assertEqual(val, i + 1)
+ 
+-        self.assertEqual(TestCallbacks.called, 100)
++        self.assertEqual(called, 100)
+ 
+     def test_callback_userdata_no_user_data(self):
+-        TestCallbacks.called = 0
++        called = 0
+ 
+         def callback():
+-            TestCallbacks.called += 1
+-            return TestCallbacks.called
++            nonlocal called
++            called += 1
++            return called
+ 
+         for i in range(100):
+             val = Everything.test_callback_user_data(callback)
+             self.assertEqual(val, i + 1)
+ 
+-        self.assertEqual(TestCallbacks.called, 100)
++        self.assertEqual(called, 100)
+ 
+     def test_callback_userdata_varargs(self):
+-        TestCallbacks.called = 0
++        called = 0
+         collected_user_data = []
+ 
+         def callback(a, b):
++            nonlocal called
+             collected_user_data.extend([a, b])
+-            TestCallbacks.called += 1
+-            return TestCallbacks.called
++            called += 1
++            return called
+ 
+         for i in range(10):
+             val = Everything.test_callback_user_data(callback, 1, 2)
+             self.assertEqual(val, i + 1)
+ 
+-        self.assertEqual(TestCallbacks.called, 10)
++        self.assertEqual(called, 10)
+         self.assertSequenceEqual(collected_user_data, [1, 2] * 10)
+ 
+     def test_callback_userdata_as_kwarg_tuple(self):
+-        TestCallbacks.called = 0
++        called = 0
+         collected_user_data = []
+ 
+         def callback(user_data):
++            nonlocal called
+             collected_user_data.extend(user_data)
+-            TestCallbacks.called += 1
+-            return TestCallbacks.called
++            called += 1
++            return called
+ 
+         for i in range(10):
+             val = Everything.test_callback_user_data(callback, user_data=(1, 2))
+             self.assertEqual(val, i + 1)
+ 
+-        self.assertEqual(TestCallbacks.called, 10)
++        self.assertEqual(called, 10)
+         self.assertSequenceEqual(collected_user_data, [1, 2] * 10)
+ 
+     def test_callback_user_data_middle_none(self):
+@@ -1079,26 +1088,33 @@ class TestCallbacks(unittest.TestCase):
+         self.assertEqual(cb_info["userdata"], (-5, "User Data"))
+ 
+     def test_async_ready_callback(self):
+-        TestCallbacks.called = False
+-        TestCallbacks.main_loop = GLib.MainLoop()
++        called = False
++        context = GLib.MainContext()
++        main_loop = GLib.MainLoop(context)
++        context.push_thread_default()
+ 
+         def callback(obj, result, user_data):
+-            TestCallbacks.main_loop.quit()
+-            TestCallbacks.called = True
+-
+-        Everything.test_async_ready_callback(callback)
++            nonlocal called
++            main_loop.quit()
++            called = True
+ 
+-        TestCallbacks.main_loop.run()
++        try:
++            Everything.test_async_ready_callback(callback)
++            main_loop.run()
++        finally:
++            context.pop_thread_default()
+ 
+-        self.assertTrue(TestCallbacks.called)
++        self.assertTrue(called)
+ 
++    @pytest.mark.thread_unsafe
+     def test_callback_scope_notified_with_destroy(self):
+-        TestCallbacks.called = 0
++        called = 0
+         ud = "Test scope notified data 33"
+ 
+         def callback(user_data):
++            nonlocal called
+             self.assertEqual(user_data, ud)
+-            TestCallbacks.called += 1
++            called += 1
+             return 33
+ 
+         if hasattr(sys, "getrefcount"):
+@@ -1110,24 +1126,26 @@ class TestCallbacks(unittest.TestCase):
+             res = Everything.test_callback_destroy_notify(callback, ud)
+             self.assertEqual(res, 33)
+ 
+-        self.assertEqual(TestCallbacks.called, 100)
++        self.assertEqual(called, 100)
+         if hasattr(sys, "getrefcount"):
+             self.assertEqual(sys.getrefcount(callback), callback_refcount + 100)
+             self.assertEqual(sys.getrefcount(ud), value_refcount + 100)
+ 
+         # thaw will call the callback again, this time resources should be freed
+         self.assertEqual(Everything.test_callback_thaw_notifications(), 33 * 100)
+-        self.assertEqual(TestCallbacks.called, 200)
++        self.assertEqual(called, 200)
+         if hasattr(sys, "getrefcount"):
+             self.assertEqual(sys.getrefcount(callback), callback_refcount)
+             self.assertEqual(sys.getrefcount(ud), value_refcount)
+ 
++    @pytest.mark.thread_unsafe
+     def test_callback_scope_notified_with_destroy_no_user_data(self):
+-        TestCallbacks.called = 0
++        called = 0
+ 
+         def callback(user_data):
++            nonlocal called
+             self.assertEqual(user_data, None)
+-            TestCallbacks.called += 1
++            called += 1
+             return 34
+ 
+         if hasattr(sys, "getrefcount"):
+@@ -1142,7 +1160,7 @@ class TestCallbacks(unittest.TestCase):
+                 callback,
+             )
+ 
+-        self.assertEqual(TestCallbacks.called, 0)
++        self.assertEqual(called, 0)
+         if hasattr(sys, "getrefcount"):
+             self.assertEqual(sys.getrefcount(callback), callback_refcount)
+ 
+@@ -1158,44 +1176,47 @@ class TestCallbacks(unittest.TestCase):
+             self.assertTrue("Callables passed to" in str(w[-1].message))
+ 
+         self.assertEqual(res, 34)
+-        self.assertEqual(TestCallbacks.called, 1)
++        self.assertEqual(called, 1)
+         if hasattr(sys, "getrefcount"):
+             self.assertEqual(sys.getrefcount(callback), callback_refcount + 1)
+ 
+         # thaw will call the callback again,
+         # refcount will not go down without user_data parameter
+         self.assertEqual(Everything.test_callback_thaw_notifications(), 34)
+-        self.assertEqual(TestCallbacks.called, 2)
++        self.assertEqual(called, 2)
+         if hasattr(sys, "getrefcount"):
+             self.assertEqual(sys.getrefcount(callback), callback_refcount + 1)
+ 
++    @pytest.mark.thread_unsafe
+     def test_callback_in_methods(self):
+         object_ = Everything.TestObj()
+ 
+         def callback():
+-            TestCallbacks.called = True
++            nonlocal called
++            called = True
+             return 42
+ 
+-        TestCallbacks.called = False
++        called = False
+         object_.instance_method_callback(callback)
+-        self.assertTrue(TestCallbacks.called)
++        self.assertTrue(called)
+ 
+-        TestCallbacks.called = False
++        called = False
+         Everything.TestObj.static_method_callback(callback)
+-        self.assertTrue(TestCallbacks.called)
++        self.assertTrue(called)
+ 
+         def callbackWithUserData(user_data):
+-            TestCallbacks.called += 1
++            nonlocal called
++            called += 1
+             return 42
+ 
+-        TestCallbacks.called = 0
++        called = 0
+         Everything.TestObj.new_callback(callbackWithUserData, None)
+-        self.assertEqual(TestCallbacks.called, 1)
++        self.assertEqual(called, 1)
+         # Note: using "new_callback" adds the notification to the same global
+         # list as Everything.test_callback_destroy_notify, so thaw the list
+         # so we don't get confusion between tests.
+         self.assertEqual(Everything.test_callback_thaw_notifications(), 42)
+-        self.assertEqual(TestCallbacks.called, 2)
++        self.assertEqual(called, 2)
+ 
+     def test_callback_none(self):
+         # make sure this doesn't assert or crash
+@@ -1203,92 +1224,100 @@ class TestCallbacks(unittest.TestCase):
+ 
+     def test_callback_gerror(self):
+         def callback(error):
++            nonlocal called
+             self.assertEqual(error.message, "regression test error")
+             self.assertTrue("g-io" in error.domain)
+             self.assertEqual(error.code, Gio.IOErrorEnum.NOT_SUPPORTED)
+-            TestCallbacks.called = True
++            called = True
+ 
+-        TestCallbacks.called = False
++        called = False
+         Everything.test_gerror_callback(callback)
+-        self.assertTrue(TestCallbacks.called)
++        self.assertTrue(called)
+ 
+     def test_callback_null_gerror(self):
+         def callback(error):
++            nonlocal called
+             self.assertEqual(error, None)
+-            TestCallbacks.called = True
++            called = True
+ 
+-        TestCallbacks.called = False
++        called = False
+         Everything.test_null_gerror_callback(callback)
+-        self.assertTrue(TestCallbacks.called)
++        self.assertTrue(called)
+ 
+     def test_callback_owned_gerror(self):
+         def callback(error):
++            nonlocal called
+             self.assertEqual(error.message, "regression test owned error")
+             self.assertTrue("g-io" in error.domain)
+             self.assertEqual(error.code, Gio.IOErrorEnum.PERMISSION_DENIED)
+-            TestCallbacks.called = True
++            called = True
+ 
+-        TestCallbacks.called = False
++        called = False
+         Everything.test_owned_gerror_callback(callback)
+-        self.assertTrue(TestCallbacks.called)
++        self.assertTrue(called)
+ 
+     def test_callback_hashtable(self):
+         def callback(data):
++            nonlocal called
+             self.assertEqual(data, mydict)
+             mydict["new"] = 42
+-            TestCallbacks.called = True
++            called = True
+ 
+         mydict = {"foo": 1, "bar": 2}
+-        TestCallbacks.called = False
++        called = False
+         Everything.test_hash_table_callback(mydict, callback)
+-        self.assertTrue(TestCallbacks.called)
++        self.assertTrue(called)
+         self.assertEqual(mydict, {"foo": 1, "bar": 2, "new": 42})
+ 
+ 
+ class TestClosures(unittest.TestCase):
+     def test_no_arg(self):
+         def callback():
+-            self.called = True
++            nonlocal called
++            called = True
+             return 42
+ 
+-        self.called = False
++        called = False
+         result = Everything.test_closure(callback)
+-        self.assertTrue(self.called)
++        self.assertTrue(called)
+         self.assertEqual(result, 42)
+ 
+     def test_int_arg(self):
+         def callback(num):
+-            self.called = True
++            nonlocal called
++            called = True
+             return num + 1
+ 
+-        self.called = False
++        called = False
+         result = Everything.test_closure_one_arg(callback, 42)
+-        self.assertTrue(self.called)
++        self.assertTrue(called)
+         self.assertEqual(result, 43)
+ 
+     def test_variant(self):
+         def callback(variant):
+-            self.called = True
++            nonlocal called
++            called = True
+             if variant is None:
+                 return None
+             self.assertEqual(variant.get_type_string(), "i")
+             return GLib.Variant("i", variant.get_int32() + 1)
+ 
+-        self.called = False
++        called = False
+         result = Everything.test_closure_variant(callback, GLib.Variant("i", 42))
+-        self.assertTrue(self.called)
++        self.assertTrue(called)
+         self.assertEqual(result.get_type_string(), "i")
+         self.assertEqual(result.get_int32(), 43)
+ 
+-        self.called = False
++        called = False
+         result = Everything.test_closure_variant(callback, None)
+-        self.assertTrue(self.called)
++        self.assertTrue(called)
+         self.assertEqual(result, None)
+ 
+-        self.called = False
++        called = False
+         self.assertRaises(TypeError, Everything.test_closure_variant, callback, "foo")
+-        self.assertFalse(self.called)
++        self.assertFalse(called)
+ 
++    @pytest.mark.thread_unsafe  # uses capture_exceptions()
+     def test_variant_wrong_return_type(self):
+         def callback(variant):
+             return "no_variant"
+@@ -1387,6 +1416,7 @@ class TestBoxed(unittest.TestCase):
+         del obj
+         gc.collect()
+ 
++    @pytest.mark.thread_unsafe
+     def test_array_fixed_boxed_none_out(self):
+         arr = Everything.test_array_fixed_boxed_none_out()
+         assert len(arr) == 2
+@@ -1399,6 +1429,7 @@ class TestBoxed(unittest.TestCase):
+             int8 = random.randint(GLib.MININT8, GLib.MAXINT8)
+             assert Everything.test_gvalue_out_boxed(int8).some_int8 == int8
+ 
++    @pytest.mark.thread_unsafe
+     def test_glist_boxed_none_return(self):
+         assert len(Everything.test_glist_boxed_none_return(0)) == 0
+ 
+@@ -1417,6 +1448,7 @@ class TestBoxed(unittest.TestCase):
+ 
+ 
+ class TestTortureProfile(unittest.TestCase):
++    @pytest.mark.thread_unsafe  # slow test
+     def test_torture_profile(self):
+         total_time = 0
+         object_ = Everything.TestObj()
+diff --git a/tests/test_fundamental.py b/tests/test_fundamental.py
+index 57ddf3c3..aacf8634 100644
+--- a/tests/test_fundamental.py
++++ b/tests/test_fundamental.py
+@@ -62,6 +62,7 @@ def test_create_fundamental_refcount():
+     assert obj.refcount == 1
+ 
+ 
++@pytest.mark.thread_unsafe  # uses gc.collect()
+ def test_delete_fundamental_refcount():
+     obj = Regress.TestFundamentalSubObject.new("foo")
+     del obj
+@@ -135,6 +136,7 @@ def test_multiple_objects():
+     assert obj1 != obj2
+ 
+ 
++@pytest.mark.thread_unsafe  # uses gc.collect()
+ def test_fundamental_weak_ref():
+     obj = Regress.TestFundamentalSubObject()
+     weak = weakref.ref(obj)
+@@ -153,6 +155,7 @@ def test_fundamental_primitive_object():
+     assert bitmask.v == 2
+ 
+ 
++@pytest.mark.thread_unsafe  # uses gc.collect()
+ def test_custom_fundamental_type_vfunc_override():
+     class MyCustomFundamentalObject(Regress.TestFundamentalObject):
+         def __init__(self):
+diff --git a/tests/test_gdbus.py b/tests/test_gdbus.py
+index 26d3f2c7..b8f9ee2c 100644
+--- a/tests/test_gdbus.py
++++ b/tests/test_gdbus.py
+@@ -1,6 +1,8 @@
+ import asyncio
+ import unittest
+ 
++import pytest
++
+ from gi.events import GLibEventLoopPolicy
+ from gi.repository import GLib
+ from gi.repository import Gio
+@@ -43,6 +45,7 @@ class TestDBusNodeInfo(unittest.TestCase):
+ 
+ 
+ @unittest.skipUnless(has_dbus, "no dbus running")
++@pytest.mark.thread_unsafe
+ class TestGDBusClient(unittest.TestCase):
+     def setUp(self):
+         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+@@ -288,6 +291,7 @@ class TestGDBusClient(unittest.TestCase):
+         SomeProxy()
+ 
+ 
++@pytest.mark.thread_unsafe
+ class TestDBusConnection:
+     @unittest.skipUnless(has_dbus, "no dbus running")
+     def test_register_object(self):
+@@ -410,6 +414,7 @@ class TestDBusConnection:
+ 
+ 
+ @unittest.skipUnless(has_dbus, "no dbus running")
++@pytest.mark.thread_unsafe
+ class AsyncDBusTests(unittest.TestCase):
+     def setUp(self):
+         policy = GLibEventLoopPolicy()
+diff --git a/tests/test_gi.py b/tests/test_gi.py
+index 2e4028b0..e1c2631a 100644
+--- a/tests/test_gi.py
++++ b/tests/test_gi.py
+@@ -3,7 +3,6 @@ import sys
+ import unittest
+ import tempfile
+ import types
+-import shutil
+ import os
+ import gc
+ import weakref
+@@ -737,18 +736,13 @@ class TestUtf8(unittest.TestCase):
+ 
+ 
+ class TestFilename(unittest.TestCase):
+-    def setUp(self):
+-        self.workdir = tempfile.mkdtemp()
+-
+-    def tearDown(self):
+-        shutil.rmtree(self.workdir)
+-
+     def tests_filename_list_return(self):
+         assert GIMarshallingTests.filename_list_return() == []
+ 
+     @unittest.skipIf(os.name == "nt", "fixme")
+     def test_filename_in(self):
+-        fname = os.path.join(self.workdir, "testäø.txt")
++        workdir = tempfile.mkdtemp()
++        fname = os.path.join(workdir, "testäø.txt")
+ 
+         try:
+             os.path.exists(fname)
+@@ -770,7 +764,8 @@ class TestFilename(unittest.TestCase):
+         self.assertRaises(TypeError, GIMarshallingTests.filename_exists, None)
+ 
+     def test_filename_in_pathlike(self):
+-        fpath = pathlib.Path(self.workdir) / "test_pathlike.txt"
++        workdir = tempfile.mkdtemp()
++        fpath = pathlib.Path(workdir) / "test_pathlike.txt"
+ 
+         try:
+             os.path.exists(fpath)
+@@ -898,14 +893,15 @@ class TestFilename(unittest.TestCase):
+         if os.name != "nt":
+             return
+ 
+-        path = os.path.join(self.workdir, "\ud83d")
++        workdir = tempfile.mkdtemp()
++        path = os.path.join(workdir, "\ud83d")
+         with open(path, "wb"):
+             self.assertTrue(os.path.exists(path))
+             self.assertTrue(GIMarshallingTests.filename_exists(path))
+         os.unlink(path)
+ 
+     def test_path_exists_various_types(self):
+-        wd = self.workdir
++        wd = tempfile.mkdtemp()
+         wdb = os.fsencode(wd)
+ 
+         paths = [(wdb, b"foo-1"), (wd, "foo-2"), (wd, "öäü-3")]
+@@ -1278,6 +1274,7 @@ class TestGStrv(unittest.TestCase):
+ 
+ 
+ class TestArrayGVariant(unittest.TestCase):
++    @pytest.mark.thread_unsafe
+     def test_array_gvariant_none_in(self):
+         v = [GLib.Variant("i", 27), GLib.Variant("s", "Hello")]
+         returned = [
+@@ -1313,6 +1310,7 @@ class TestGArray(unittest.TestCase):
+         GIMarshallingTests.garray_unichar_none_in(CONSTANT_UCS4)
+         GIMarshallingTests.garray_unichar_none_in(list(CONSTANT_UCS4))
+ 
++    @pytest.mark.thread_unsafe
+     def test_garray_int_none_return(self):
+         self.assertEqual([-1, 0, 1, 2], GIMarshallingTests.garray_int_none_return())
+ 
+@@ -1331,6 +1329,7 @@ class TestGArray(unittest.TestCase):
+             GIMarshallingTests.garray_enum_none_return(),
+         )
+ 
++    @pytest.mark.thread_unsafe
+     def test_garray_utf8_none_return(self):
+         self.assertEqual(["0", "1", "2"], GIMarshallingTests.garray_utf8_none_return())
+ 
+@@ -1358,6 +1357,7 @@ class TestGArray(unittest.TestCase):
+     def test_garray_utf8_none_in(self):
+         GIMarshallingTests.garray_utf8_none_in(Sequence(["0", "1", "2"]))
+ 
++    @pytest.mark.thread_unsafe
+     def test_garray_utf8_none_out(self):
+         self.assertEqual(["0", "1", "2"], GIMarshallingTests.garray_utf8_none_out())
+ 
+@@ -1374,6 +1374,7 @@ class TestGArray(unittest.TestCase):
+             ["0", "1", "2"], GIMarshallingTests.garray_utf8_full_out_caller_allocated()
+         )
+ 
++    @pytest.mark.thread_unsafe
+     def test_garray_utf8_none_inout(self):
+         self.assertEqual(
+             ["-2", "-1", "0", "1"],
+@@ -1394,6 +1395,7 @@ class TestGArray(unittest.TestCase):
+ 
+ 
+ class TestGPtrArray(unittest.TestCase):
++    @pytest.mark.thread_unsafe
+     def test_gptrarray_utf8_none_return(self):
+         self.assertEqual(
+             ["0", "1", "2"], GIMarshallingTests.gptrarray_utf8_none_return()
+@@ -1418,6 +1420,7 @@ class TestGPtrArray(unittest.TestCase):
+             Sequence(["0", "1", 2]),
+         )
+ 
++    @pytest.mark.thread_unsafe
+     def test_gptrarray_utf8_none_out(self):
+         self.assertEqual(["0", "1", "2"], GIMarshallingTests.gptrarray_utf8_none_out())
+ 
+@@ -1429,6 +1432,7 @@ class TestGPtrArray(unittest.TestCase):
+     def test_gptrarray_utf8_full_out(self):
+         self.assertEqual(["0", "1", "2"], GIMarshallingTests.gptrarray_utf8_full_out())
+ 
++    @pytest.mark.thread_unsafe
+     def test_gptrarray_utf8_none_inout(self):
+         self.assertEqual(
+             ["-2", "-1", "0", "1"],
+@@ -1515,14 +1519,17 @@ class TestGByteArray(unittest.TestCase):
+ 
+ 
+ class TestGList(unittest.TestCase):
++    @pytest.mark.thread_unsafe
+     def test_glist_int_none_return(self):
+         self.assertEqual([-1, 0, 1, 2], GIMarshallingTests.glist_int_none_return())
+ 
++    @pytest.mark.thread_unsafe
+     def test_glist_uint32_none_return(self):
+         self.assertEqual(
+             [0, GLib.MAXUINT32], GIMarshallingTests.glist_uint32_none_return()
+         )
+ 
++    @pytest.mark.thread_unsafe
+     def test_glist_utf8_none_return(self):
+         self.assertEqual(["0", "1", "2"], GIMarshallingTests.glist_utf8_none_return())
+ 
+@@ -1570,6 +1577,7 @@ class TestGList(unittest.TestCase):
+     def test_glist_utf8_full_out(self):
+         self.assertEqual(["0", "1", "2"], GIMarshallingTests.glist_utf8_full_out())
+ 
++    @pytest.mark.thread_unsafe
+     def test_glist_utf8_none_inout(self):
+         self.assertEqual(
+             ["-2", "-1", "0", "1"],
+@@ -1590,9 +1598,11 @@ class TestGList(unittest.TestCase):
+ 
+ 
+ class TestGSList(unittest.TestCase):
++    @pytest.mark.thread_unsafe
+     def test_gslist_int_none_return(self):
+         self.assertEqual([-1, 0, 1, 2], GIMarshallingTests.gslist_int_none_return())
+ 
++    @pytest.mark.thread_unsafe
+     def test_gslist_utf8_none_return(self):
+         self.assertEqual(["0", "1", "2"], GIMarshallingTests.gslist_utf8_none_return())
+ 
+@@ -1639,6 +1649,7 @@ class TestGSList(unittest.TestCase):
+     def test_gslist_utf8_full_out(self):
+         self.assertEqual(["0", "1", "2"], GIMarshallingTests.gslist_utf8_full_out())
+ 
++    @pytest.mark.thread_unsafe
+     def test_gslist_utf8_none_inout(self):
+         self.assertEqual(
+             ["-2", "-1", "0", "1"],
+@@ -1683,11 +1694,13 @@ class TestGHashTable(unittest.TestCase):
+             {"-1": GLib.MAXUINT32 + 1, "0": 0, "1": 1, "2": 2}
+         )
+ 
++    @pytest.mark.thread_unsafe
+     def test_ghashtable_int_none_return(self):
+         self.assertEqual(
+             {-1: 1, 0: 0, 1: -1, 2: -2}, GIMarshallingTests.ghashtable_int_none_return()
+         )
+ 
++    @pytest.mark.thread_unsafe
+     def test_ghashtable_int_none_return2(self):
+         self.assertEqual(
+             {"-1": "1", "0": "0", "1": "-1", "2": "-2"},
+@@ -1732,6 +1745,7 @@ class TestGHashTable(unittest.TestCase):
+             {"-1": "1", "0": "0", "1": "-1", "2": "-2"}
+         )
+ 
++    @pytest.mark.thread_unsafe
+     def test_ghashtable_utf8_none_out(self):
+         self.assertEqual(
+             {"-1": "1", "0": "0", "1": "-1", "2": "-2"},
+@@ -1750,6 +1764,7 @@ class TestGHashTable(unittest.TestCase):
+             GIMarshallingTests.ghashtable_utf8_full_out(),
+         )
+ 
++    @pytest.mark.thread_unsafe
+     def test_ghashtable_utf8_none_inout(self):
+         i = {"-1": "1", "0": "0", "1": "-1", "2": "-2"}
+         self.assertEqual(
+@@ -1780,6 +1795,7 @@ class TestGHashTable(unittest.TestCase):
+             }
+         )
+ 
++    @pytest.mark.thread_unsafe
+     def test_ghashtable_enum_none_return(self):
+         self.assertEqual(
+             {
+@@ -1893,6 +1909,7 @@ class TestGValue(unittest.TestCase):
+         values = GIMarshallingTests.return_gvalue_flat_array()
+         self.assertEqual(values, [42, "42", True])
+ 
++    @pytest.mark.thread_unsafe
+     def test_gvalue_gobject_ref_counts_simple(self):
+         obj = GObject.Object()
+         grefcount = obj.__grefcount__
+@@ -1901,6 +1918,7 @@ class TestGValue(unittest.TestCase):
+         gc.collect()
+         assert obj.__grefcount__ == grefcount
+ 
++    @pytest.mark.thread_unsafe
+     def test_gvalue_gobject_ref_counts(self):
+         # Tests a GObject held by a GValue
+         obj = GObject.Object()
+@@ -1939,6 +1957,7 @@ class TestGValue(unittest.TestCase):
+         self.assertEqual(ref(), None)
+ 
+     @unittest.skipUnless(hasattr(sys, "getrefcount"), "no sys.getrefcount")
++    @pytest.mark.thread_unsafe
+     def test_gvalue_boxed_ref_counts(self):
+         # Tests a boxed type wrapping a python object pointer (TYPE_PYOBJECT)
+         # held by a GValue
+@@ -2247,6 +2266,7 @@ class TestGEnum(unittest.TestCase):
+             GIMarshallingTests.GEnum.__module__, "gi.repository.GIMarshallingTests"
+         )
+ 
++    @pytest.mark.thread_unsafe
+     def test_enum_values_property(self):
+         with warnings.catch_warnings():
+             warnings.simplefilter("ignore", PyGIDeprecationWarning)
+@@ -2346,6 +2366,7 @@ class TestGFlags(unittest.TestCase):
+             GIMarshallingTests.Flags.__module__, "gi.repository.GIMarshallingTests"
+         )
+ 
++    @pytest.mark.thread_unsafe
+     def test_flags_values_property(self):
+         flags_values = {
+             1: GIMarshallingTests.Flags.VALUE1,
+@@ -2645,6 +2666,7 @@ class TestStructure(unittest.TestCase):
+         self.assertEqual(struct.long_, 42)
+         self.assertEqual(struct.string_, "hello")
+ 
++    @pytest.mark.thread_unsafe
+     def test_union_init(self):
+         with warnings.catch_warnings(record=True) as warn:
+             warnings.simplefilter("always")
+@@ -2793,6 +2815,7 @@ class TestGObject(unittest.TestCase):
+     #        object_.int_ = 42
+     #        self.assertEqual(object_.int_, 42)
+ 
++    @pytest.mark.thread_unsafe
+     def test_object_none_return(self):
+         object_ = GIMarshallingTests.Object.none_return()
+         self.assertTrue(isinstance(object_, GIMarshallingTests.Object))
+@@ -2816,6 +2839,7 @@ class TestGObject(unittest.TestCase):
+ 
+         self.assertRaises(TypeError, GIMarshallingTests.Object.none_in, None)
+ 
++    @pytest.mark.thread_unsafe
+     def test_object_none_out(self):
+         object_ = GIMarshallingTests.Object.none_out()
+         self.assertTrue(isinstance(object_, GIMarshallingTests.Object))
+@@ -2829,6 +2853,7 @@ class TestGObject(unittest.TestCase):
+         self.assertTrue(isinstance(object_, GIMarshallingTests.Object))
+         self.assertEqual(object_.__grefcount__, 1)
+ 
++    @pytest.mark.thread_unsafe
+     def test_object_none_inout(self):
+         object_ = GIMarshallingTests.Object(int=42)
+         new_object = GIMarshallingTests.Object.none_inout(object_)
+@@ -3025,6 +3050,7 @@ class TestPythonGObject(unittest.TestCase):
+         self.assertEqual(object_.props.int, 84)
+ 
+     @unittest.skipUnless(hasattr(sys, "getrefcount"), "no sys.getrefcount")
++    @pytest.mark.thread_unsafe
+     def test_vfunc_return_ref_count(self):
+         obj = self.Object(int=42)
+         ref_count = sys.getrefcount(obj.return_for_caller_allocated_out_parameter)
+@@ -3152,6 +3178,7 @@ class TestPythonGObject(unittest.TestCase):
+         object_.call_vfunc_with_callback()
+         self.assertTrue(object_.worked)
+ 
++    @pytest.mark.thread_unsafe  # uses capture_exceptions()
+     def test_exception_in_vfunc_return_value(self):
+         obj = self.ErrorObject()
+         with capture_exceptions() as exc:
+@@ -3159,6 +3186,7 @@ class TestPythonGObject(unittest.TestCase):
+         self.assertEqual(len(exc), 1)
+         self.assertEqual(exc[0].type, ValueError)
+ 
++    @pytest.mark.thread_unsafe
+     def test_callback_owned_box(self):
+         def callback(box, data):
+             self.box = box
+@@ -3171,40 +3199,42 @@ class TestPythonGObject(unittest.TestCase):
+         self.assertEqual(self.box.long_, 1)
+ 
+     def test_callback_user_data_after_callback(self):
++        callback_args = []
++
+         def callback(*args):
+-            self.callback_args = args
++            nonlocal callback_args
++            callback_args = args
+ 
+         GIMarshallingTests.callback_user_data_after_callback(1, 2, callback)
+-        self.assertEqual(self.callback_args, (1, 2))
++        self.assertEqual(callback_args, (1, 2))
+ 
+         GIMarshallingTests.callback_user_data_after_callback(3, 4, callback, "testdata")
+-        self.assertEqual(self.callback_args, (3, 4, "testdata"))
++        self.assertEqual(callback_args, (3, 4, "testdata"))
+ 
+         GIMarshallingTests.callback_user_data_after_callback(
+             5, 6, callback, "more testdata", "even more testdata"
+         )
+-        self.assertEqual(
+-            self.callback_args, (5, 6, "more testdata", "even more testdata")
+-        )
++        self.assertEqual(callback_args, (5, 6, "more testdata", "even more testdata"))
+ 
+     def test_callback_user_data_before_callback(self):
++        callback_args = []
++
+         def callback(*args):
+-            self.callback_args = args
++            nonlocal callback_args
++            callback_args = args
+ 
+         GIMarshallingTests.callback_user_data_before_callback(1, 2, None, callback)
+-        self.assertEqual(self.callback_args, (1, 2, None))
++        self.assertEqual(callback_args, (1, 2, None))
+ 
+         GIMarshallingTests.callback_user_data_before_callback(
+             3, 4, "testdata", callback
+         )
+-        self.assertEqual(self.callback_args, (3, 4, "testdata"))
++        self.assertEqual(callback_args, (3, 4, "testdata"))
+ 
+         GIMarshallingTests.callback_user_data_before_callback(
+             5, 6, ("more testdata", "even more testdata"), callback
+         )
+-        self.assertEqual(
+-            self.callback_args, (5, 6, ("more testdata", "even more testdata"))
+-        )
++        self.assertEqual(callback_args, (5, 6, ("more testdata", "even more testdata")))
+ 
+ 
+ class TestMultiOutputArgs(unittest.TestCase):
+@@ -3227,9 +3257,6 @@ class TestInterfaces(unittest.TestCase):
+         def do_test_int8_in(self, int8):
+             self.val = int8
+ 
+-    def setUp(self):
+-        self.instance = self.TestInterfaceImpl()
+-
+     def test_iface_impl(self):
+         instance = GIMarshallingTests.InterfaceImpl()
+         assert instance.get_as_interface() is instance
+@@ -3246,11 +3273,14 @@ class TestInterfaces(unittest.TestCase):
+         self.assertTrue(
+             issubclass(self.TestInterfaceImpl, GIMarshallingTests.Interface)
+         )
+-        self.assertTrue(isinstance(self.instance, GIMarshallingTests.Interface))
++        self.assertTrue(
++            isinstance(self.TestInterfaceImpl(), GIMarshallingTests.Interface)
++        )
+ 
+     def test_int8_int(self):
+-        GIMarshallingTests.test_interface_test_int8_in(self.instance, 42)
+-        self.assertEqual(self.instance.val, 42)
++        instance = self.TestInterfaceImpl()
++        GIMarshallingTests.test_interface_test_int8_in(instance, 42)
++        self.assertEqual(instance.val, 42)
+ 
+     def test_subclass(self):
+         class TestInterfaceImplA(self.TestInterfaceImpl):
+@@ -3385,6 +3415,7 @@ class TestMRO(unittest.TestCase):
+         class TestInterfaceImpl3(TestInterfaceImpl, GIMarshallingTests.Interface2):
+             pass
+ 
++    @pytest.mark.thread_unsafe
+     def test_old_style_mixin(self):
+         # Note: Old style classes don't exist in Python 3
+         class Mixin:
+@@ -3708,6 +3739,7 @@ class TestModule(unittest.TestCase):
+             item = getattr(GIMarshallingTests, item_name)
+             self.assertTrue(hasattr(item, "__class__"))
+ 
++    @pytest.mark.thread_unsafe
+     def test_help(self):
+         with capture_output() as (stdout, _stderr):
+             help(GIMarshallingTests)
+@@ -3734,6 +3766,7 @@ class TestProjectVersion(unittest.TestCase):
+ 
+ 
+ class TestGIWarning(unittest.TestCase):
++    @pytest.mark.thread_unsafe
+     def test_warning(self):
+         ignored_by_default = (
+             DeprecationWarning,
+@@ -3749,6 +3782,8 @@ class TestGIWarning(unittest.TestCase):
+             self.assertFalse(issubclass(warn[0].category, ignored_by_default))
+ 
+ 
++# deprecation warnings are only triggered once
++@pytest.mark.thread_unsafe
+ class TestDeprecation(unittest.TestCase):
+     def test_method(self):
+         d = GLib.Date.new()
+diff --git a/tests/test_gio.py b/tests/test_gio.py
+index f3165fc5..b92a0929 100644
+--- a/tests/test_gio.py
++++ b/tests/test_gio.py
+@@ -333,6 +333,7 @@ Exec={GLib.find_program_in_path("true")} action
+             self.assertNotEqual(Gio.InputStreamClass, GioUnix.InputStreamClass)
+ 
+ 
++@pytest.mark.thread_unsafe  # Settings are global
+ class TestGSettings(unittest.TestCase):
+     def setUp(self):
+         self.settings = Gio.Settings.new("org.gnome.test")
+@@ -477,6 +478,7 @@ class TestGFile(unittest.TestCase):
+             # test_delete and test_delete_async already remove it
+             self.file.delete(None)
+ 
++    @pytest.mark.thread_unsafe
+     def test_replace_contents(self):
+         content = b"hello\0world\x7f!"
+         succ, etag = self.file.replace_contents(
+@@ -518,9 +520,11 @@ class TestGFile(unittest.TestCase):
+         self.assertTrue(self.file.query_exists(None))
+ 
+     def test_delete(self):
+-        self.file.delete(None)
+-        self.assertFalse(self.file.query_exists(None))
++        file, _io_stream = Gio.File.new_tmp("TestGFile.XXXXXX")
++        file.delete(None)
++        self.assertFalse(file.query_exists(None))
+ 
++    @pytest.mark.thread_unsafe  # uses MainLoop
+     def test_delete_async(self):
+         def callback(f, result, data):
+             main_loop.quit()
+@@ -533,6 +537,7 @@ class TestGFile(unittest.TestCase):
+ 
+ @unittest.skipIf(os.name == "nt", "crashes on Windows")
+ class TestGApplication(unittest.TestCase):
++    @pytest.mark.thread_unsafe  # uses Gio.Application.run()
+     def test_command_line(self):
+         class App(Gio.Application):
+             args = None
+@@ -550,6 +555,7 @@ class TestGApplication(unittest.TestCase):
+         self.assertEqual(res, 42)
+         self.assertSequenceEqual(app.args, ["spam", "eggs"])
+ 
++    @pytest.mark.thread_unsafe  # uses Gio.Application.run()
+     def test_local_command_line(self):
+         class App(Gio.Application):
+             local_args = None
+@@ -570,6 +576,7 @@ class TestGApplication(unittest.TestCase):
+         self.assertEqual(res, 42)
+         self.assertSequenceEqual(app.local_args, ["spam", "eggs"])
+ 
++    @pytest.mark.thread_unsafe  # uses Gio.Application.run()
+     def test_local_and_remote_command_line(self):
+         class App(Gio.Application):
+             args = None
+@@ -596,6 +603,7 @@ class TestGApplication(unittest.TestCase):
+         self.assertSequenceEqual(app.args, ["spam"])
+         self.assertSequenceEqual(app.local_args, ["spam", "eggs"])
+ 
++    @pytest.mark.thread_unsafe  # uses Gio.Application.run()
+     def test_add_main_option(self):
+         stored_options = []
+ 
+diff --git a/tests/test_glib.py b/tests/test_glib.py
+index 5b0d3006..6db266f8 100644
+--- a/tests/test_glib.py
++++ b/tests/test_glib.py
+@@ -21,6 +21,7 @@ with contextlib.suppress(ImportError):
+ 
+ class TestGLib(unittest.TestCase):
+     @pytest.mark.xfail()
++    @pytest.mark.thread_unsafe  # Uses global main loop
+     def test_pytest_capture_error_in_closure(self):
+         # this test is supposed to fail
+         ml = GLib.MainLoop()
+@@ -51,6 +52,7 @@ class TestGLib(unittest.TestCase):
+         GLib.set_prgname("moo")
+         self.assertEqual(GLib.get_prgname(), "moo")
+ 
++    @pytest.mark.thread_unsafe
+     def test_appname(self):
+         GLib.set_application_name("moo")
+         self.assertEqual(GLib.get_application_name(), "moo")
+@@ -139,6 +141,7 @@ https://my.org/q?x=1&y=2
+         self.assertFalse(ml.is_running())
+         self.assertEqual(ml.get_context(), context)
+ 
++    @pytest.mark.thread_unsafe  # uses default main context
+     def test_main_context(self):
+         # constructor
+         context = GLib.MainContext()
+@@ -168,6 +171,7 @@ https://my.org/q?x=1&y=2
+         assert len(fds) == 1
+ 
+     @unittest.skipIf(os.name == "nt", "hangs")
++    @pytest.mark.thread_unsafe
+     def test_io_add_watch_no_data(self):
+         (r, w) = os.pipe()
+         call_data = []
+@@ -198,6 +202,7 @@ https://my.org/q?x=1&y=2
+         )
+ 
+     @unittest.skipIf(os.name == "nt", "hangs")
++    @pytest.mark.thread_unsafe
+     def test_io_add_watch_with_data(self):
+         (r, w) = os.pipe()
+         call_data = []
+@@ -234,6 +239,7 @@ https://my.org/q?x=1&y=2
+         )
+ 
+     @unittest.skipIf(os.name == "nt", "hangs")
++    @pytest.mark.thread_unsafe
+     def test_io_add_watch_with_multiple_data(self):
+         (r, w) = os.pipe()
+         call_data = []
+@@ -258,6 +264,7 @@ https://my.org/q?x=1&y=2
+ 
+     @unittest.skipIf(sys.platform == "darwin", "fails")
+     @unittest.skipIf(os.name == "nt", "no shell on Windows")
++    @pytest.mark.thread_unsafe
+     def test_io_add_watch_pyfile(self):
+         call_data = []
+ 
+@@ -324,6 +331,7 @@ https://my.org/q?x=1&y=2
+         self.assertTrue(GLib.Source.remove(source_id))
+ 
+ 
++@pytest.mark.thread_unsafe  # warnings are only issued once
+ class TestGLibPlatform(unittest.TestCase):
+     @classmethod
+     def setUpClass(cls):
+diff --git a/tests/test_gobject.py b/tests/test_gobject.py
+index 15a2ac21..76777f64 100644
+--- a/tests/test_gobject.py
++++ b/tests/test_gobject.py
+@@ -178,6 +178,7 @@ class TestReferenceCounting(unittest.TestCase):
+         obj.release()
+         self.assertEqual(obj.__grefcount__, 1)
+ 
++    @pytest.mark.thread_unsafe
+     def test_owned_by_library_out_of_scope(self):
+         obj = testhelper.OwnedByLibrary()
+         self.assertEqual(obj.__grefcount__, 2)
+@@ -209,6 +210,7 @@ class TestReferenceCounting(unittest.TestCase):
+         obj.release()
+         self.assertEqual(obj.__grefcount__, 1)
+ 
++    @pytest.mark.thread_unsafe
+     def test_owned_by_library_out_of_scope_using_gobject_new(self):
+         obj = GObject.new(testhelper.OwnedByLibrary)
+         self.assertEqual(obj.__grefcount__, 2)
+@@ -240,6 +242,7 @@ class TestReferenceCounting(unittest.TestCase):
+         obj.release()
+         self.assertEqual(obj.__grefcount__, 1)
+ 
++    @pytest.mark.thread_unsafe
+     def test_floating_and_sunk_out_of_scope(self):
+         obj = testhelper.FloatingAndSunk()
+         self.assertEqual(obj.__grefcount__, 2)
+@@ -271,6 +274,7 @@ class TestReferenceCounting(unittest.TestCase):
+         obj.release()
+         self.assertEqual(obj.__grefcount__, 1)
+ 
++    @pytest.mark.thread_unsafe
+     def test_floating_and_sunk_out_of_scope_using_gobject_new(self):
+         obj = GObject.new(testhelper.FloatingAndSunk)
+         self.assertEqual(obj.__grefcount__, 2)
+@@ -339,6 +343,7 @@ class TestPythonReferenceCounting(unittest.TestCase):
+             )
+ 
+ 
++@pytest.mark.thread_unsafe
+ class TestContextManagers(unittest.TestCase):
+     class ContextTestObject(GObject.GObject):
+         prop = GObject.Property(default=0, type=int)
+@@ -516,29 +521,29 @@ class TestPropertyBindings(unittest.TestCase):
+     class TestObject(GObject.GObject):
+         int_prop = GObject.Property(default=0, type=int)
+ 
+-    def setUp(self):
+-        self.source = self.TestObject()
+-        self.target = self.TestObject()
+-
+     def test_default_binding(self):
+-        binding = self.source.bind_property(
+-            "int_prop", self.target, "int_prop", GObject.BindingFlags.DEFAULT
++        source = self.TestObject()
++        target = self.TestObject()
++        binding = source.bind_property(
++            "int_prop", target, "int_prop", GObject.BindingFlags.DEFAULT
+         )
+         binding = binding
+ 
+         # Test setting value on source gets pushed to target
+-        self.source.int_prop = 1
+-        self.assertEqual(self.source.int_prop, 1)
+-        self.assertEqual(self.target.int_prop, 1)
++        source.int_prop = 1
++        self.assertEqual(source.int_prop, 1)
++        self.assertEqual(target.int_prop, 1)
+ 
+         # Test setting value on target does not change source
+-        self.target.props.int_prop = 2
+-        self.assertEqual(self.source.int_prop, 1)
+-        self.assertEqual(self.target.int_prop, 2)
++        target.props.int_prop = 2
++        self.assertEqual(source.int_prop, 1)
++        self.assertEqual(target.int_prop, 2)
+ 
+     def test_call_binding(self):
+-        binding = self.source.bind_property(
+-            "int_prop", self.target, "int_prop", GObject.BindingFlags.DEFAULT
++        source = self.TestObject()
++        target = self.TestObject()
++        binding = source.bind_property(
++            "int_prop", target, "int_prop", GObject.BindingFlags.DEFAULT
+         )
+         with capture_glib_deprecation_warnings() as warn:
+             result = binding()
+@@ -546,29 +551,34 @@ class TestPropertyBindings(unittest.TestCase):
+         assert result is binding
+ 
+     def test_bidirectional_binding(self):
+-        binding = self.source.bind_property(
+-            "int_prop", self.target, "int_prop", GObject.BindingFlags.BIDIRECTIONAL
++        source = self.TestObject()
++        target = self.TestObject()
++        binding = source.bind_property(
++            "int_prop", target, "int_prop", GObject.BindingFlags.BIDIRECTIONAL
+         )
+         binding = binding
+ 
+         # Test setting value on source gets pushed to target
+-        self.source.int_prop = 1
+-        self.assertEqual(self.source.int_prop, 1)
+-        self.assertEqual(self.target.int_prop, 1)
++        source.int_prop = 1
++        self.assertEqual(source.int_prop, 1)
++        self.assertEqual(target.int_prop, 1)
+ 
+         # Test setting value on target also changes source
+-        self.target.props.int_prop = 2
+-        self.assertEqual(self.source.int_prop, 2)
+-        self.assertEqual(self.target.int_prop, 2)
++        target.props.int_prop = 2
++        self.assertEqual(source.int_prop, 2)
++        self.assertEqual(target.int_prop, 2)
+ 
+     def test_transform_to_only(self):
++        source = self.TestObject()
++        target = self.TestObject()
++
+         def transform_to(binding, value, user_data=None):
+             self.assertEqual(user_data, "test-data")
+             return value * 2
+ 
+-        binding = self.source.bind_property(
++        binding = source.bind_property(
+             "int_prop",
+-            self.target,
++            target,
+             "int_prop",
+             GObject.BindingFlags.DEFAULT,
+             transform_to,
+@@ -576,37 +586,42 @@ class TestPropertyBindings(unittest.TestCase):
+         )
+         binding = binding
+ 
+-        self.source.int_prop = 1
+-        self.assertEqual(self.source.int_prop, 1)
+-        self.assertEqual(self.target.int_prop, 2)
++        source.int_prop = 1
++        self.assertEqual(source.int_prop, 1)
++        self.assertEqual(target.int_prop, 2)
+ 
+-        self.target.props.int_prop = 1
+-        self.assertEqual(self.source.int_prop, 1)
+-        self.assertEqual(self.target.int_prop, 1)
++        target.props.int_prop = 1
++        self.assertEqual(source.int_prop, 1)
++        self.assertEqual(target.int_prop, 1)
+ 
+     def test_transform_from_only(self):
++        source = self.TestObject()
++        target = self.TestObject()
++
+         def transform_from(binding, value, user_data=None):
+             self.assertEqual(user_data, None)
+             return value * 2
+ 
+-        binding = self.source.bind_property(
++        binding = source.bind_property(
+             "int_prop",
+-            self.target,
++            target,
+             "int_prop",
+             GObject.BindingFlags.BIDIRECTIONAL,
+             transform_from=transform_from,
+         )
+         binding = binding
+ 
+-        self.source.int_prop = 1
+-        self.assertEqual(self.source.int_prop, 1)
+-        self.assertEqual(self.target.int_prop, 1)
++        source.int_prop = 1
++        self.assertEqual(source.int_prop, 1)
++        self.assertEqual(target.int_prop, 1)
+ 
+-        self.target.props.int_prop = 1
+-        self.assertEqual(self.source.int_prop, 2)
+-        self.assertEqual(self.target.int_prop, 1)
++        target.props.int_prop = 1
++        self.assertEqual(source.int_prop, 2)
++        self.assertEqual(target.int_prop, 1)
+ 
+     def test_transform_bidirectional(self):
++        source = self.TestObject()
++        target = self.TestObject()
+         test_data = object()
+ 
+         def transform_to(binding, value, user_data=None):
+@@ -623,9 +638,9 @@ class TestPropertyBindings(unittest.TestCase):
+             transform_from_ref_count = sys.getrefcount(transform_from)
+ 
+         # bidirectional bindings
+-        binding = self.source.bind_property(
++        binding = source.bind_property(
+             "int_prop",
+-            self.target,
++            target,
+             "int_prop",
+             GObject.BindingFlags.BIDIRECTIONAL,
+             transform_to,
+@@ -637,13 +652,13 @@ class TestPropertyBindings(unittest.TestCase):
+             binding_ref_count = sys.getrefcount(binding)
+             binding_gref_count = binding.__grefcount__
+ 
+-        self.source.int_prop = 1
+-        self.assertEqual(self.source.int_prop, 1)
+-        self.assertEqual(self.target.int_prop, 2)
++        source.int_prop = 1
++        self.assertEqual(source.int_prop, 1)
++        self.assertEqual(target.int_prop, 2)
+ 
+-        self.target.props.int_prop = 4
+-        self.assertEqual(self.source.int_prop, 2)
+-        self.assertEqual(self.target.int_prop, 4)
++        target.props.int_prop = 4
++        self.assertEqual(source.int_prop, 2)
++        self.assertEqual(target.int_prop, 4)
+ 
+         if hasattr(sys, "getrefcount"):
+             self.assertEqual(sys.getrefcount(binding), binding_ref_count)
+@@ -661,10 +676,10 @@ class TestPropertyBindings(unittest.TestCase):
+         binding.unbind()
+ 
+         # Setting source or target should not change the other.
+-        self.target.int_prop = 3
+-        self.source.int_prop = 5
+-        self.assertEqual(self.target.int_prop, 3)
+-        self.assertEqual(self.source.int_prop, 5)
++        target.int_prop = 3
++        source.int_prop = 5
++        self.assertEqual(target.int_prop, 3)
++        self.assertEqual(source.int_prop, 5)
+ 
+         if hasattr(sys, "getrefcount"):
+             self.assertEqual(sys.getrefcount(test_data), test_data_ref_count)
+@@ -672,53 +687,57 @@ class TestPropertyBindings(unittest.TestCase):
+             self.assertEqual(sys.getrefcount(transform_from), transform_from_ref_count)
+ 
+     def test_explicit_unbind_clears_connection(self):
+-        self.assertEqual(self.source.int_prop, 0)
+-        self.assertEqual(self.target.int_prop, 0)
++        source = self.TestObject()
++        target = self.TestObject()
++        self.assertEqual(source.int_prop, 0)
++        self.assertEqual(target.int_prop, 0)
+ 
+         # Test deleting binding reference removes binding.
+-        binding = self.source.bind_property("int_prop", self.target, "int_prop")
+-        self.source.int_prop = 1
+-        self.assertEqual(self.source.int_prop, 1)
+-        self.assertEqual(self.target.int_prop, 1)
++        binding = source.bind_property("int_prop", target, "int_prop")
++        source.int_prop = 1
++        self.assertEqual(source.int_prop, 1)
++        self.assertEqual(target.int_prop, 1)
+ 
+         # unbind should clear out the bindings self reference
+         binding.unbind()
+         self.assertEqual(binding.__grefcount__, 1)
+ 
+-        self.source.int_prop = 10
+-        self.assertEqual(self.source.int_prop, 10)
+-        self.assertEqual(self.target.int_prop, 1)
++        source.int_prop = 10
++        self.assertEqual(source.int_prop, 10)
++        self.assertEqual(target.int_prop, 1)
+ 
+         for i in range(10):
+             binding.unbind()
+ 
+     def test_reference_counts(self):
+-        self.assertEqual(self.source.__grefcount__, 1)
+-        self.assertEqual(self.target.__grefcount__, 1)
++        source = self.TestObject()
++        target = self.TestObject()
++        self.assertEqual(source.__grefcount__, 1)
++        self.assertEqual(target.__grefcount__, 1)
+ 
+         # Binding ref count will be 2 do to the initial ref implicitly held by
+         # the act of binding and the ref incurred by using __call__ to generate
+         # a wrapper from the weak binding ref within python.
+-        binding = self.source.bind_property("int_prop", self.target, "int_prop")
++        binding = source.bind_property("int_prop", target, "int_prop")
+         self.assertEqual(binding.__grefcount__, 2)
+ 
+         # Creating a binding does not inc refs on source and target (they are weak
+         # on the binding object itself)
+-        self.assertEqual(self.source.__grefcount__, 1)
+-        self.assertEqual(self.target.__grefcount__, 1)
++        self.assertEqual(source.__grefcount__, 1)
++        self.assertEqual(target.__grefcount__, 1)
+ 
+         # Use GObject.get_property because the "props" accessor leaks.
+         # Note property names are canonicalized.
+-        self.assertEqual(binding.get_property("source"), self.source)
++        self.assertEqual(binding.get_property("source"), source)
+         self.assertEqual(binding.get_property("source_property"), "int-prop")
+-        self.assertEqual(binding.get_property("target"), self.target)
++        self.assertEqual(binding.get_property("target"), target)
+         self.assertEqual(binding.get_property("target_property"), "int-prop")
+         self.assertEqual(binding.get_property("flags"), GObject.BindingFlags.DEFAULT)
+ 
+         # Delete reference to source or target and the binding will remove its own
+         # "self reference".
+-        ref = self.source.weak_ref()
+-        del self.source
++        ref = source.weak_ref()
++        del source
+         gc.collect()
+         self.assertEqual(ref(), None)
+         self.assertEqual(binding.__grefcount__, 1)
+diff --git a/tests/test_gtk_template.py b/tests/test_gtk_template.py
+index 1f17a59e..ac7557f3 100644
+--- a/tests/test_gtk_template.py
++++ b/tests/test_gtk_template.py
+@@ -1,4 +1,5 @@
+ import gc
++import itertools
+ import os
+ import tempfile
+ import weakref
+@@ -15,9 +16,8 @@ from .helper import capture_exceptions
+ GTK4 = Gtk._version == "4.0"
+ 
+ 
+-def new_gtype_name(_count=[0]):
+-    _count[0] += 1
+-    return f"GtkTemplateTest{_count[0]:d}"
++def new_gtype_name(_counter=itertools.count(1)):
++    return f"GtkTemplateTest{next(_counter):d}"
+ 
+ 
+ def ensure_resource_registered():
+@@ -84,6 +84,7 @@ def test_allow_init_template_call():
+     Foo()
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_init_template_second_instance():
+     type_name = new_gtype_name()
+ 
+@@ -118,6 +119,7 @@ def test_init_template_second_instance():
+     assert isinstance(foo2.label, Gtk.Label)
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_main_example():
+     type_name = new_gtype_name()
+ 
+@@ -251,6 +253,7 @@ def test_duplicate_child():
+         Gtk.Template.from_string(xml)(Foo)
+ 
+ 
++@pytest.mark.thread_unsafe  # uses capture_exceptions()
+ def test_nonexist_handler():
+     type_name = new_gtype_name()
+ 
+@@ -296,6 +299,7 @@ def test_missing_handler_callback():
+     Gtk.Template.from_string(xml)(Foo)()
+ 
+ 
++@pytest.mark.thread_unsafe  # uses capture_exceptions()
+ def test_handler_swapped_not_supported():
+     type_name = new_gtype_name()
+ 
+@@ -387,6 +391,7 @@ def test_check_decorated_class():
+ 
+ 
+ @pytest.mark.skipif(Gtk._version == "4.0", reason="errors out first with gtk4")
++@pytest.mark.thread_unsafe
+ def test_subclass_fail():
+     @Gtk.Template.from_string("")
+     class Base(Gtk.Widget):
+@@ -502,6 +507,7 @@ def test_from_string_bytes():
+     assert foo.props.spacing == 42
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_from_resource():
+     resource_path = ensure_resource_registered()
+ 
+@@ -551,6 +557,7 @@ def test_child_construct():
+         Gtk.Template.Child("name", internal=True, something=False)
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_internal_child():
+     main_type_name = new_gtype_name()
+ 
+@@ -618,6 +625,7 @@ def test_internal_child():
+     assert child.props.label == "foo"
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_template_hierarchy():
+     testlabel = """
+     <interface>
+@@ -690,6 +698,7 @@ def test_template_hierarchy():
+     assert isinstance(win, MyWindow)
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_multiple_init_template_calls():
+     xml = """
+     <interface>
+@@ -723,6 +732,7 @@ def test_multiple_init_template_calls():
+     assert len(children) == 1
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_python_class_hierarchy():
+     xml = """
+     <interface>
+@@ -757,6 +767,7 @@ def test_python_class_hierarchy():
+ 
+ 
+ @pytest.mark.skipif(not GTK4, reason="GTK 4 only")
++@pytest.mark.thread_unsafe
+ def test_finalization_of_custom_child_objects():
+     xml = """
+     <?xml version="1.0" encoding="UTF-8"?>
+@@ -808,6 +819,7 @@ def test_finalization_of_custom_child_objects():
+     assert "CustomLabel -> GObject finalized" in finalized
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_signal_handler_with_object_does_not_leak_memory():
+     """Regression test for a memory leak when using signal handlers in GTK templates.
+     Note that this example is intentionally minimal, i.e. the handler doesn't even
+diff --git a/tests/test_import_machinery.py b/tests/test_import_machinery.py
+index 83d1a16b..1c920e33 100644
+--- a/tests/test_import_machinery.py
++++ b/tests/test_import_machinery.py
+@@ -1,6 +1,8 @@
+ import sys
+ import unittest
+ 
++import pytest
++
+ import gi.overrides
+ import gi.module
+ import gi.importer
+@@ -24,6 +26,7 @@ class TestOverrides(unittest.TestCase):
+         # https://bugzilla.gnome.org/show_bug.cgi?id=680913
+         self.assertEqual(Regress.REGRESS_OVERRIDE, 42)
+ 
++    @pytest.mark.thread_unsafe
+     def test_load_overrides(self):
+         mod = gi.module.get_introspection_module("GIMarshallingTests")
+         mod_override = gi.overrides.load_overrides(mod)
+@@ -32,6 +35,7 @@ class TestOverrides(unittest.TestCase):
+         self.assertEqual(mod_override.OVERRIDES_CONSTANT, 7)
+         self.assertEqual(mod.OVERRIDES_CONSTANT, 42)
+ 
++    @pytest.mark.thread_unsafe
+     def test_load_no_overrides(self):
+         mod_key = "gi.overrides.GIMarshallingTests"
+         had_mod = mod_key in sys.modules
+@@ -51,6 +55,7 @@ class TestOverrides(unittest.TestCase):
+ class TestModule(unittest.TestCase):
+     # Tests for gi.module
+ 
++    @pytest.mark.thread_unsafe
+     def test_get_introspection_module_caching(self):
+         # This test attempts to minimize side effects by
+         # using a DynamicModule directly instead of going though:
+diff --git a/tests/test_iochannel.py b/tests/test_iochannel.py
+index a3b91c85..4b1f8487 100644
+--- a/tests/test_iochannel.py
++++ b/tests/test_iochannel.py
+@@ -10,6 +10,8 @@ try:
+ except ImportError:
+     fcntl = None
+ 
++import pytest
++
+ from gi.repository import GLib
+ from gi import PyGIDeprecationWarning
+ 
+@@ -120,6 +122,7 @@ second line
+         self.assertRaises(ValueError, ch.seek, 0, 3)
+         ch.shutdown(True)
+ 
++    @pytest.mark.thread_unsafe
+     def test_file_write(self):
+         ch = GLib.IOChannel(filename=self.testout, mode="w")
+         ch.set_encoding("latin1")
+@@ -133,6 +136,7 @@ second line
+         with open(self.testout, "rb") as f:
+             self.assertEqual(f.read().decode("latin1"), "hellø world\nÀ demain!")
+ 
++    @pytest.mark.thread_unsafe
+     def test_file_writelines(self):
+         ch = GLib.IOChannel(filename=self.testout, mode="w")
+         ch.writelines(["foo", "bar\n", "baz\n", "end"])
+@@ -141,6 +145,7 @@ second line
+         with open(self.testout) as f:
+             self.assertEqual(f.read(), "foobar\nbaz\nend")
+ 
++    @pytest.mark.thread_unsafe
+     def test_buffering(self):
+         writer = GLib.IOChannel(filename=self.testout, mode="w")
+         writer.set_encoding(None)
+@@ -195,6 +200,7 @@ second line
+         ch.shutdown(True)
+ 
+     @unittest.skipUnless(fcntl, "no fcntl")
++    @pytest.mark.thread_unsafe
+     def test_fd_write(self):
+         (r, w) = os.pipe()
+         fcntl.fcntl(r, fcntl.F_SETFL, fcntl.fcntl(r, fcntl.F_GETFL) | os.O_NONBLOCK)
+@@ -213,6 +219,7 @@ second line
+         os.close(r)
+ 
+     @unittest.skipIf(os.name == "nt", "NONBLOCK not implemented on Windows")
++    @pytest.mark.thread_unsafe  # uses default main loop
+     def test_deprecated_method_add_watch_no_data(self):
+         (r, w) = os.pipe()
+ 
+@@ -248,6 +255,7 @@ second line
+         self.assertEqual(cb_reads, [b"a", b"b"])
+ 
+     @unittest.skipIf(os.name == "nt", "NONBLOCK not implemented on Windows")
++    @pytest.mark.thread_unsafe  # uses default main loop
+     def test_deprecated_method_add_watch_data_priority(self):
+         (r, w) = os.pipe()
+ 
+@@ -290,6 +298,7 @@ second line
+         self.assertEqual(cb_reads, [b"a", b"b"])
+ 
+     @unittest.skipIf(os.name == "nt", "NONBLOCK not implemented on Windows")
++    @pytest.mark.thread_unsafe  # uses default main loop
+     def test_add_watch_no_data(self):
+         (r, w) = os.pipe()
+ 
+@@ -325,6 +334,7 @@ second line
+         self.assertEqual(cb_reads, [b"a", b"b"])
+ 
+     @unittest.skipIf(os.name == "nt", "NONBLOCK not implemented on Windows")
++    @pytest.mark.thread_unsafe  # uses default main loop
+     def test_add_watch_with_data(self):
+         (r, w) = os.pipe()
+ 
+@@ -361,6 +371,7 @@ second line
+         self.assertEqual(cb_reads, [b"a", b"b"])
+ 
+     @unittest.skipIf(os.name == "nt", "NONBLOCK not implemented on Windows")
++    @pytest.mark.thread_unsafe  # uses default main loop
+     def test_add_watch_with_multi_data(self):
+         (r, w) = os.pipe()
+ 
+@@ -401,6 +412,7 @@ second line
+         self.assertEqual(cb_reads, [b"a", b"b"])
+ 
+     @unittest.skipIf(os.name == "nt", "NONBLOCK not implemented on Windows")
++    @pytest.mark.thread_unsafe  # uses default main loop
+     def test_deprecated_add_watch_no_data(self):
+         (r, w) = os.pipe()
+ 
+@@ -441,6 +453,7 @@ second line
+         self.assertEqual(cb_reads, [b"a", b"b"])
+ 
+     @unittest.skipIf(os.name == "nt", "NONBLOCK not implemented on Windows")
++    @pytest.mark.thread_unsafe  # uses default main loop
+     def test_deprecated_add_watch_with_data(self):
+         (r, w) = os.pipe()
+ 
+diff --git a/tests/test_mainloop.py b/tests/test_mainloop.py
+index d1a2352d..2cbb5b4d 100644
+--- a/tests/test_mainloop.py
++++ b/tests/test_mainloop.py
+@@ -4,6 +4,8 @@ import signal
+ import unittest
+ import warnings
+ 
++import pytest
++
+ from gi.repository import GLib
+ 
+ from .helper import capture_exceptions
+@@ -11,6 +13,7 @@ from .helper import capture_exceptions
+ 
+ class TestMainLoop(unittest.TestCase):
+     @unittest.skipUnless(hasattr(os, "fork"), "no os.fork available")
++    @pytest.mark.thread_unsafe  # uses capture_exceptions
+     def test_exception_handling(self):
+         pipe_r, pipe_w = os.pipe()
+ 
+@@ -43,6 +46,7 @@ class TestMainLoop(unittest.TestCase):
+ 
+     @unittest.skipUnless(hasattr(os, "fork"), "no os.fork available")
+     @unittest.skipIf(os.environ.get("PYGI_TEST_GDB"), "SIGINT stops gdb")
++    @pytest.mark.thread_unsafe
+     def test_sigint(self):
+         r, w = os.pipe()
+         with warnings.catch_warnings():
+diff --git a/tests/test_ossig.py b/tests/test_ossig.py
+index d7f4ba06..2ab0c859 100644
+--- a/tests/test_ossig.py
++++ b/tests/test_ossig.py
+@@ -20,6 +20,8 @@ import unittest
+ import threading
+ from contextlib import contextmanager
+ 
++import pytest
++
+ try:
+     from gi.repository import Gtk
+ 
+@@ -31,6 +33,7 @@ from gi.repository import Gio, GLib
+ from gi._ossighelper import wakeup_on_signal, register_sigint_fallback
+ 
+ 
++@pytest.mark.thread_unsafe  # only works in main thread of the main interpreter
+ class TestOverridesWakeupOnAlarm(unittest.TestCase):
+     @contextmanager
+     def _run_with_timeout(self, timeout, abort_func):
+@@ -119,6 +122,7 @@ class TestSigintFallback(unittest.TestCase):
+     def tearDown(self):
+         self.assertEqual(signal.getsignal(signal.SIGINT), signal.default_int_handler)
+ 
++    @pytest.mark.thread_unsafe
+     def test_replace_handler_and_restore_nested(self):
+         with register_sigint_fallback(lambda: None):
+             new_handler = signal.getsignal(signal.SIGINT)
+@@ -127,6 +131,7 @@ class TestSigintFallback(unittest.TestCase):
+                 self.assertTrue(signal.getsignal(signal.SIGINT) is new_handler)
+         self.assertEqual(signal.getsignal(signal.SIGINT), signal.default_int_handler)
+ 
++    @pytest.mark.thread_unsafe
+     def test_no_replace_if_not_default(self):
+         def new_handler(*args):
+             return None
+@@ -162,6 +167,7 @@ class TestSigintFallback(unittest.TestCase):
+         self.assertFalse(failed)
+ 
+     @unittest.skipIf(os.name == "nt", "not on Windows")
++    @pytest.mark.thread_unsafe
+     def test_no_replace_if_set_by_glib(self):
+         id_ = GLib.unix_signal_add(
+             GLib.PRIORITY_DEFAULT, signal.SIGINT, lambda *args: None
+diff --git a/tests/test_overrides_gdk.py b/tests/test_overrides_gdk.py
+index e6a1a6d0..5602485a 100644
+--- a/tests/test_overrides_gdk.py
++++ b/tests/test_overrides_gdk.py
+@@ -34,6 +34,7 @@ from .helper import capture_glib_deprecation_warnings
+ 
+ 
+ @unittest.skipUnless(Gdk, "Gdk not available")
++@pytest.mark.thread_unsafe  # GDK is not thread-safe
+ class TestGdk(unittest.TestCase):
+     @unittest.skipIf(sys.platform == "darwin" or os.name == "nt", "crashes")
+     @unittest.skipIf(GDK4, "not in gdk4")
+diff --git a/tests/test_overrides_gio.py b/tests/test_overrides_gio.py
+index 1ea6474a..fbc7edf7 100644
+--- a/tests/test_overrides_gio.py
++++ b/tests/test_overrides_gio.py
+@@ -396,6 +396,7 @@ def test_file_fspath_with_no_path():
+         assert path == os.getcwd()
+ 
+ 
++@pytest.mark.thread_unsafe  # constant file name
+ def test_file_truediv():
+     tmp_path = GLib.get_tmp_dir()
+     folder = Gio.File.new_for_path(tmp_path)
+diff --git a/tests/test_overrides_glib.py b/tests/test_overrides_glib.py
+index fb4e353a..eabb3321 100644
+--- a/tests/test_overrides_glib.py
++++ b/tests/test_overrides_glib.py
+@@ -84,6 +84,7 @@ def test_gerror_matches():
+     assert e.matches(42, 24)
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_timeout_add_seconds():
+     h = GLib.timeout_add_seconds(
+         100, lambda *x: None, 1, 2, 3, priority=GLib.PRIORITY_HIGH_IDLE
+diff --git a/tests/test_overrides_gobject.py b/tests/test_overrides_gobject.py
+index fbc68ba5..39d66402 100644
+--- a/tests/test_overrides_gobject.py
++++ b/tests/test_overrides_gobject.py
+@@ -33,6 +33,7 @@ def test_signal_parse_name():
+         GObject.signal_parse_name("foobar", obj, True)
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_signal_query():
+     obj = GObject.GObject()
+     res = GObject.signal_query("notify", obj)
+diff --git a/tests/test_overrides_gtk.py b/tests/test_overrides_gtk.py
+index 0189bbd7..d07d9094 100644
+--- a/tests/test_overrides_gtk.py
++++ b/tests/test_overrides_gtk.py
+@@ -389,6 +389,11 @@ class TestGtk(unittest.TestCase):
+         mi = ui.get_widget("/menubær1")
+         self.assertEqual(type(mi), Gtk.MenuBar)
+ 
++    if Gtk_version:
++
++        class TestWindow(Gtk.Window):
++            __gtype_name__ = "TestWindow"
++
+     @unittest.skipIf(Gtk_version == "4.0", "not in gtk4")
+     def test_window_gtk3(self):
+         # standard Window
+@@ -399,9 +404,6 @@ class TestGtk(unittest.TestCase):
+         w = Gtk.Window(type=Gtk.WindowType.POPUP)
+         self.assertEqual(w.get_property("type"), Gtk.WindowType.POPUP)
+ 
+-        class TestWindow(Gtk.Window):
+-            __gtype_name__ = "TestWindow"
+-
+         # works from builder
+         builder = Gtk.Builder()
+         builder.add_from_string("""
+@@ -433,9 +435,6 @@ class TestGtk(unittest.TestCase):
+         w.set_default_size(300, 300)
+         self.assertEqual(w.get_default_size(), (300, 300))
+ 
+-        class TestWindow(Gtk.Window):
+-            __gtype_name__ = "TestWindow"
+-
+         # works from builder
+         builder = Gtk.Builder()
+         builder.add_from_string("""
+@@ -1009,6 +1008,7 @@ class TestGtk(unittest.TestCase):
+         self.assertEqual(Gtk.stock_lookup("nosuchthing"), None)
+ 
+     @unittest.skipIf(Gtk_version == "4.0", "not in gtk4")
++    @pytest.mark.thread_unsafe  # GTK main loop
+     def test_gtk_main(self):
+         # with no arguments
+         GLib.idle_add(Gtk.main_quit)
+@@ -1019,6 +1019,7 @@ class TestGtk(unittest.TestCase):
+         Gtk.main()
+ 
+     @unittest.skipIf(Gtk_version == "4.0", "not in gtk4")
++    @pytest.mark.thread_unsafe
+     def test_widget_render_icon(self):
+         button = Gtk.Button(label="OK")
+         pixbuf = button.render_icon(Gtk.STOCK_OK, Gtk.IconSize.BUTTON)
+@@ -1090,6 +1091,7 @@ class TestWidget(unittest.TestCase):
+             button.style_get_property("not-a-valid-style-property")
+ 
+     @unittest.skipIf(Gtk_version != "4.0", "only in gtk4")
++    @pytest.mark.thread_unsafe
+     def test_translate_coordinates(self):
+         box = Gtk.Box()
+         child = Gtk.Button()
+@@ -1102,6 +1104,7 @@ class TestWidget(unittest.TestCase):
+ @unittest.skipIf(sys.platform == "darwin", "hangs")
+ @unittest.skipUnless(Gtk, "Gtk not available")
+ class TestSignals(unittest.TestCase):
++    @pytest.mark.thread_unsafe
+     def test_class_closure_override_with_aliased_type(self):
+         class WindowWithSizeAllocOverride(Gtk.ScrolledWindow):
+             if not GTK4:
+@@ -2841,6 +2844,7 @@ class TestTreeModel(unittest.TestCase):
+ @unittest.skipIf(sys.platform == "darwin", "hangs")
+ @unittest.skipUnless(Gtk, "Gtk not available")
+ class TestTreeView(unittest.TestCase):
++    @pytest.mark.thread_unsafe
+     def test_tree_view(self):
+         store = Gtk.ListStore(int, str)
+         store.append((0, "foo"))
+@@ -2863,6 +2867,7 @@ class TestTreeView(unittest.TestCase):
+         # Regression test for: https://bugzilla.gnome.org/show_bug.cgi?id=711173
+         col.set_cell_data_func(cell, None, None)
+ 
++    @pytest.mark.thread_unsafe
+     def test_tree_view_add_column_with_attributes(self):
+         model = Gtk.ListStore(str, str, str)
+         # deliberately use out-of-order sorting here; we assign column 0 to
+@@ -2905,6 +2910,7 @@ class TestTreeView(unittest.TestCase):
+                 self.assertEqual(cell3.props.text, "cell13")
+                 self.assertEqual(cell4.props.text, None)
+ 
++    @pytest.mark.thread_unsafe
+     def test_tree_view_column_set_attributes(self):
+         store = Gtk.ListStore(int, str)
+         directors = ["Fellini", "Tarantino", "Tarkovskiy"]
+diff --git a/tests/test_properties.py b/tests/test_properties.py
+index ff824d85..03b47ec0 100644
+--- a/tests/test_properties.py
++++ b/tests/test_properties.py
+@@ -836,14 +836,14 @@ class TestProperty(unittest.TestCase):
+         pobj1 = pobj2.obj
+         self.assertEqual(hash(pobj1), obj1_hash)
+ 
+-    def test_object_subclass_property(self):
+-        class ObjectSubclass(GObject.GObject):
+-            __gtype_name__ = "ObjectSubclass"
++    class ObjectSubclass(GObject.GObject):
++        __gtype_name__ = "ObjectSubclass"
+ 
++    def test_object_subclass_property(self):
+         class PropertyObjectSubclass(GObject.GObject):
+-            obj = GObject.Property(type=ObjectSubclass)
++            obj = GObject.Property(type=TestProperty.ObjectSubclass)
+ 
+-        PropertyObjectSubclass(obj=ObjectSubclass())
++        PropertyObjectSubclass(obj=TestProperty.ObjectSubclass())
+ 
+     def test_generic_instance_property(self):
+         GObject.Property(type=Gio.ListStore[Gio.File])
+@@ -1018,6 +1018,7 @@ class TestProperty(unittest.TestCase):
+         self.assertRaises(TypeError, tester._type_from_python, types.CodeType)
+ 
+ 
++@pytest.mark.thread_unsafe
+ class TestInstallProperties(unittest.TestCase):
+     # These tests only test how signalhelper.install_signals works
+     # with the __gsignals__ dict and therefore does not need to use
+@@ -1091,9 +1092,6 @@ class TestInstallProperties(unittest.TestCase):
+ class CPropertiesTestBase:
+     # Tests for properties implemented in C not Python.
+ 
+-    def setUp(self):
+-        self.obj = GIMarshallingTests.PropertiesObject()
+-
+     def get_prop(self, obj, name):
+         raise NotImplementedError
+ 
+@@ -1101,12 +1099,13 @@ class CPropertiesTestBase:
+         raise NotImplementedError
+ 
+     def test_flags(self):
++        obj = GIMarshallingTests.PropertiesObject()
+         self.assertEqual(
+-            self.get_prop(self.obj, "some-flags"), GIMarshallingTests.Flags.VALUE1
++            self.get_prop(obj, "some-flags"), GIMarshallingTests.Flags.VALUE1
+         )
+-        self.set_prop(self.obj, "some-flags", GIMarshallingTests.Flags.VALUE2)
++        self.set_prop(obj, "some-flags", GIMarshallingTests.Flags.VALUE2)
+         self.assertEqual(
+-            self.get_prop(self.obj, "some-flags"), GIMarshallingTests.Flags.VALUE2
++            self.get_prop(obj, "some-flags"), GIMarshallingTests.Flags.VALUE2
+         )
+ 
+         obj = GIMarshallingTests.PropertiesObject(
+@@ -1116,8 +1115,10 @@ class CPropertiesTestBase:
+             self.get_prop(obj, "some-flags"), GIMarshallingTests.Flags.VALUE3
+         )
+ 
++    @pytest.mark.thread_unsafe
+     def test_flags_values(self):
+-        prop = self.obj.find_property("some-flags")
++        obj = GIMarshallingTests.PropertiesObject()
++        prop = obj.find_property("some-flags")
+         flags_class = prop.flags_class
+ 
+         assert GIMarshallingTests.Flags.VALUE1 in flags_class
+@@ -1125,12 +1126,13 @@ class CPropertiesTestBase:
+         assert GIMarshallingTests.Flags.VALUE3 in flags_class
+ 
+     def test_enum(self):
++        obj = GIMarshallingTests.PropertiesObject()
+         self.assertEqual(
+-            self.get_prop(self.obj, "some-enum"), GIMarshallingTests.GEnum.VALUE1
++            self.get_prop(obj, "some-enum"), GIMarshallingTests.GEnum.VALUE1
+         )
+-        self.set_prop(self.obj, "some-enum", GIMarshallingTests.GEnum.VALUE2)
++        self.set_prop(obj, "some-enum", GIMarshallingTests.GEnum.VALUE2)
+         self.assertEqual(
+-            self.get_prop(self.obj, "some-enum"), GIMarshallingTests.GEnum.VALUE2
++            self.get_prop(obj, "some-enum"), GIMarshallingTests.GEnum.VALUE2
+         )
+ 
+         obj = GIMarshallingTests.PropertiesObject(
+@@ -1140,8 +1142,10 @@ class CPropertiesTestBase:
+             self.get_prop(obj, "some-enum"), GIMarshallingTests.GEnum.VALUE3
+         )
+ 
++    @pytest.mark.thread_unsafe
+     def test_enum_values(self):
+-        prop = self.obj.find_property("some-enum")
++        obj = GIMarshallingTests.PropertiesObject()
++        prop = obj.find_property("some-enum")
+         enum_class = prop.enum_class
+ 
+         assert GIMarshallingTests.GEnum.VALUE1 in enum_class
+@@ -1149,17 +1153,19 @@ class CPropertiesTestBase:
+         assert GIMarshallingTests.GEnum.VALUE3 in enum_class
+ 
+     def test_boolean(self):
+-        self.assertEqual(self.get_prop(self.obj, "some-boolean"), False)
+-        self.set_prop(self.obj, "some-boolean", True)
+-        self.assertEqual(self.get_prop(self.obj, "some-boolean"), True)
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some-boolean"), False)
++        self.set_prop(obj, "some-boolean", True)
++        self.assertEqual(self.get_prop(obj, "some-boolean"), True)
+ 
+         obj = GIMarshallingTests.PropertiesObject(some_boolean=True)
+         self.assertEqual(self.get_prop(obj, "some-boolean"), True)
+ 
+     def test_char(self):
+-        self.assertEqual(self.get_prop(self.obj, "some-char"), 0)
+-        self.set_prop(self.obj, "some-char", GLib.MAXINT8)
+-        self.assertEqual(self.get_prop(self.obj, "some-char"), GLib.MAXINT8)
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some-char"), 0)
++        self.set_prop(obj, "some-char", GLib.MAXINT8)
++        self.assertEqual(self.get_prop(obj, "some-char"), GLib.MAXINT8)
+ 
+         obj = GIMarshallingTests.PropertiesObject(some_char=-42)
+         self.assertEqual(self.get_prop(obj, "some-char"), -42)
+@@ -1185,9 +1191,10 @@ class CPropertiesTestBase:
+             GIMarshallingTests.PropertiesObject(some_char="\ud83d")
+ 
+     def test_uchar(self):
+-        self.assertEqual(self.get_prop(self.obj, "some-uchar"), 0)
+-        self.set_prop(self.obj, "some-uchar", GLib.MAXUINT8)
+-        self.assertEqual(self.get_prop(self.obj, "some-uchar"), GLib.MAXUINT8)
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some-uchar"), 0)
++        self.set_prop(obj, "some-uchar", GLib.MAXUINT8)
++        self.assertEqual(self.get_prop(obj, "some-uchar"), GLib.MAXUINT8)
+ 
+         obj = GIMarshallingTests.PropertiesObject(some_uchar=42)
+         self.assertEqual(self.get_prop(obj, "some-uchar"), 42)
+@@ -1213,77 +1220,84 @@ class CPropertiesTestBase:
+             GIMarshallingTests.PropertiesObject(some_uchar="\ud83d")
+ 
+     def test_int(self):
+-        self.assertEqual(self.get_prop(self.obj, "some_int"), 0)
+-        self.set_prop(self.obj, "some-int", GLib.MAXINT)
+-        self.assertEqual(self.get_prop(self.obj, "some_int"), GLib.MAXINT)
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some_int"), 0)
++        self.set_prop(obj, "some-int", GLib.MAXINT)
++        self.assertEqual(self.get_prop(obj, "some_int"), GLib.MAXINT)
+ 
+         obj = GIMarshallingTests.PropertiesObject(some_int=-42)
+         self.assertEqual(self.get_prop(obj, "some-int"), -42)
+ 
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-int", "foo")
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-int", None)
++        self.assertRaises(TypeError, self.set_prop, obj, "some-int", "foo")
++        self.assertRaises(TypeError, self.set_prop, obj, "some-int", None)
+ 
+         self.assertEqual(self.get_prop(obj, "some-int"), -42)
+ 
+     def test_uint(self):
+-        self.assertEqual(self.get_prop(self.obj, "some_uint"), 0)
+-        self.set_prop(self.obj, "some-uint", GLib.MAXUINT)
+-        self.assertEqual(self.get_prop(self.obj, "some_uint"), GLib.MAXUINT)
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some_uint"), 0)
++        self.set_prop(obj, "some-uint", GLib.MAXUINT)
++        self.assertEqual(self.get_prop(obj, "some_uint"), GLib.MAXUINT)
+ 
+         obj = GIMarshallingTests.PropertiesObject(some_uint=42)
+         self.assertEqual(self.get_prop(obj, "some-uint"), 42)
+ 
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-uint", "foo")
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-uint", None)
++        self.assertRaises(TypeError, self.set_prop, obj, "some-uint", "foo")
++        self.assertRaises(TypeError, self.set_prop, obj, "some-uint", None)
+ 
+         self.assertEqual(self.get_prop(obj, "some-uint"), 42)
+ 
+     def test_long(self):
+-        self.assertEqual(self.get_prop(self.obj, "some_long"), 0)
+-        self.set_prop(self.obj, "some-long", GLib.MAXLONG)
+-        self.assertEqual(self.get_prop(self.obj, "some_long"), GLib.MAXLONG)
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some_long"), 0)
++        self.set_prop(obj, "some-long", GLib.MAXLONG)
++        self.assertEqual(self.get_prop(obj, "some_long"), GLib.MAXLONG)
+ 
+         obj = GIMarshallingTests.PropertiesObject(some_long=-42)
+         self.assertEqual(self.get_prop(obj, "some-long"), -42)
+ 
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-long", "foo")
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-long", None)
++        self.assertRaises(TypeError, self.set_prop, obj, "some-long", "foo")
++        self.assertRaises(TypeError, self.set_prop, obj, "some-long", None)
+ 
+         self.assertEqual(self.get_prop(obj, "some-long"), -42)
+ 
+     def test_ulong(self):
+-        self.assertEqual(self.get_prop(self.obj, "some_ulong"), 0)
+-        self.set_prop(self.obj, "some-ulong", GLib.MAXULONG)
+-        self.assertEqual(self.get_prop(self.obj, "some_ulong"), GLib.MAXULONG)
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some_ulong"), 0)
++        self.set_prop(obj, "some-ulong", GLib.MAXULONG)
++        self.assertEqual(self.get_prop(obj, "some_ulong"), GLib.MAXULONG)
+ 
+         obj = GIMarshallingTests.PropertiesObject(some_ulong=42)
+         self.assertEqual(self.get_prop(obj, "some-ulong"), 42)
+ 
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-ulong", "foo")
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-ulong", None)
++        self.assertRaises(TypeError, self.set_prop, obj, "some-ulong", "foo")
++        self.assertRaises(TypeError, self.set_prop, obj, "some-ulong", None)
+ 
+         self.assertEqual(self.get_prop(obj, "some-ulong"), 42)
+ 
+     def test_int64(self):
+-        self.assertEqual(self.get_prop(self.obj, "some-int64"), 0)
+-        self.set_prop(self.obj, "some-int64", GLib.MAXINT64)
+-        self.assertEqual(self.get_prop(self.obj, "some-int64"), GLib.MAXINT64)
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some-int64"), 0)
++        self.set_prop(obj, "some-int64", GLib.MAXINT64)
++        self.assertEqual(self.get_prop(obj, "some-int64"), GLib.MAXINT64)
+ 
+         obj = GIMarshallingTests.PropertiesObject(some_int64=-4200000000000000)
+         self.assertEqual(self.get_prop(obj, "some-int64"), -4200000000000000)
+ 
+     def test_uint64(self):
+-        self.assertEqual(self.get_prop(self.obj, "some-uint64"), 0)
+-        self.set_prop(self.obj, "some-uint64", GLib.MAXUINT64)
+-        self.assertEqual(self.get_prop(self.obj, "some-uint64"), GLib.MAXUINT64)
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some-uint64"), 0)
++        self.set_prop(obj, "some-uint64", GLib.MAXUINT64)
++        self.assertEqual(self.get_prop(obj, "some-uint64"), GLib.MAXUINT64)
+ 
+         obj = GIMarshallingTests.PropertiesObject(some_uint64=4200000000000000)
+         self.assertEqual(self.get_prop(obj, "some-uint64"), 4200000000000000)
+ 
+     def test_float(self):
+-        self.assertEqual(self.get_prop(self.obj, "some-float"), 0)
+-        self.set_prop(self.obj, "some-float", GLib.MAXFLOAT)
+-        self.assertEqual(self.get_prop(self.obj, "some-float"), GLib.MAXFLOAT)
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some-float"), 0)
++        self.set_prop(obj, "some-float", GLib.MAXFLOAT)
++        self.assertEqual(self.get_prop(obj, "some-float"), GLib.MAXFLOAT)
+ 
+         obj = GIMarshallingTests.PropertiesObject(some_float=42.42)
+         self.assertAlmostEqual(self.get_prop(obj, "some-float"), 42.42, places=4)
+@@ -1291,15 +1305,16 @@ class CPropertiesTestBase:
+         obj = GIMarshallingTests.PropertiesObject(some_float=42)
+         self.assertAlmostEqual(self.get_prop(obj, "some-float"), 42.0, places=4)
+ 
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-float", "foo")
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-float", None)
++        self.assertRaises(TypeError, self.set_prop, obj, "some-float", "foo")
++        self.assertRaises(TypeError, self.set_prop, obj, "some-float", None)
+ 
+         self.assertAlmostEqual(self.get_prop(obj, "some-float"), 42.0, places=4)
+ 
+     def test_double(self):
+-        self.assertEqual(self.get_prop(self.obj, "some-double"), 0)
+-        self.set_prop(self.obj, "some-double", GLib.MAXDOUBLE)
+-        self.assertEqual(self.get_prop(self.obj, "some-double"), GLib.MAXDOUBLE)
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some-double"), 0)
++        self.set_prop(obj, "some-double", GLib.MAXDOUBLE)
++        self.assertEqual(self.get_prop(obj, "some-double"), GLib.MAXDOUBLE)
+ 
+         obj = GIMarshallingTests.PropertiesObject(some_double=42.42)
+         self.assertAlmostEqual(self.get_prop(obj, "some-double"), 42.42)
+@@ -1307,32 +1322,34 @@ class CPropertiesTestBase:
+         obj = GIMarshallingTests.PropertiesObject(some_double=42)
+         self.assertAlmostEqual(self.get_prop(obj, "some-double"), 42.0)
+ 
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-double", "foo")
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-double", None)
++        self.assertRaises(TypeError, self.set_prop, obj, "some-double", "foo")
++        self.assertRaises(TypeError, self.set_prop, obj, "some-double", None)
+ 
+         self.assertAlmostEqual(self.get_prop(obj, "some-double"), 42.0)
+ 
+     def test_byte_array(self):
+-        self.assertEqual(self.get_prop(self.obj, "some-byte-array"), b"")
+-        self.set_prop(self.obj, "some-byte-array", b"hello world")
+-        self.assertEqual(self.get_prop(self.obj, "some-byte-array"), b"hello world")
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some-byte-array"), b"")
++        self.set_prop(obj, "some-byte-array", b"hello world")
++        self.assertEqual(self.get_prop(obj, "some-byte-array"), b"hello world")
+ 
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-byte-array", 1)
++        self.assertRaises(TypeError, self.set_prop, obj, "some-byte-array", 1)
+         self.assertRaises(
+-            TypeError, self.set_prop, self.obj, "some-byte-array", "normal string"
++            TypeError, self.set_prop, obj, "some-byte-array", "normal string"
+         )
+ 
+     def test_strv(self):
+-        self.assertEqual(self.get_prop(self.obj, "some-strv"), [])
+-        self.set_prop(self.obj, "some-strv", ["hello", "world"])
+-        self.assertEqual(self.get_prop(self.obj, "some-strv"), ["hello", "world"])
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some-strv"), [])
++        self.set_prop(obj, "some-strv", ["hello", "world"])
++        self.assertEqual(self.get_prop(obj, "some-strv"), ["hello", "world"])
+ 
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-strv", 1)
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-strv", "foo")
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-strv", [1, 2])
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-strv", ["foo", 1])
++        self.assertRaises(TypeError, self.set_prop, obj, "some-strv", 1)
++        self.assertRaises(TypeError, self.set_prop, obj, "some-strv", "foo")
++        self.assertRaises(TypeError, self.set_prop, obj, "some-strv", [1, 2])
++        self.assertRaises(TypeError, self.set_prop, obj, "some-strv", ["foo", 1])
+ 
+-        self.assertEqual(self.get_prop(self.obj, "some-strv"), ["hello", "world"])
++        self.assertEqual(self.get_prop(obj, "some-strv"), ["hello", "world"])
+ 
+         obj = GIMarshallingTests.PropertiesObject(some_strv=["hello", "world"])
+         self.assertEqual(self.get_prop(obj, "some-strv"), ["hello", "world"])
+@@ -1340,22 +1357,20 @@ class CPropertiesTestBase:
+         # unicode on py2
+         obj = GIMarshallingTests.PropertiesObject(some_strv=["foo"])
+         self.assertEqual(self.get_prop(obj, "some-strv"), ["foo"])
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-strv", ["foo", 1])
++        self.assertRaises(TypeError, self.set_prop, obj, "some-strv", ["foo", 1])
+ 
+     def test_some_hash_table(self):
+-        self.assertEqual(self.get_prop(self.obj, "some-hash-table"), None)
+-        self.set_prop(self.obj, "some-hash-table", {1: "foo", 2: "bar"})
+-        self.assertEqual(
+-            self.get_prop(self.obj, "some-hash-table"), {1: "foo", 2: "bar"}
+-        )
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some-hash-table"), None)
++        self.set_prop(obj, "some-hash-table", {1: "foo", 2: "bar"})
++        self.assertEqual(self.get_prop(obj, "some-hash-table"), {1: "foo", 2: "bar"})
+ 
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-hash-table", 1)
+-        self.assertRaises(
+-            TypeError, self.set_prop, self.obj, "some-hash-table", {"a": "b"}
+-        )
++        self.assertRaises(TypeError, self.set_prop, obj, "some-hash-table", 1)
++        self.assertRaises(TypeError, self.set_prop, obj, "some-hash-table", {"a": "b"})
+ 
+     def test_boxed_struct(self):
+-        self.assertEqual(self.get_prop(self.obj, "some-boxed-struct"), None)
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some-boxed-struct"), None)
+ 
+         class GStrv(list):
+             __gtype__ = GObject.TYPE_STRV
+@@ -1363,30 +1378,29 @@ class CPropertiesTestBase:
+         struct1 = GIMarshallingTests.BoxedStruct()
+         struct1.long_ = 1
+ 
+-        self.set_prop(self.obj, "some-boxed-struct", struct1)
+-        self.assertEqual(self.get_prop(self.obj, "some-boxed-struct").long_, 1)
+-        self.assertEqual(self.obj.some_boxed_struct.long_, 1)
++        self.set_prop(obj, "some-boxed-struct", struct1)
++        self.assertEqual(self.get_prop(obj, "some-boxed-struct").long_, 1)
++        self.assertEqual(obj.some_boxed_struct.long_, 1)
+ 
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-boxed-struct", 1)
+-        self.assertRaises(
+-            TypeError, self.set_prop, self.obj, "some-boxed-struct", "foo"
+-        )
++        self.assertRaises(TypeError, self.set_prop, obj, "some-boxed-struct", 1)
++        self.assertRaises(TypeError, self.set_prop, obj, "some-boxed-struct", "foo")
+ 
+         obj = GIMarshallingTests.PropertiesObject(some_boxed_struct=struct1)
+         self.assertEqual(self.get_prop(obj, "some-boxed-struct").long_, 1)
+ 
+     def test_boxed_glist(self):
+-        self.assertEqual(self.get_prop(self.obj, "some-boxed-glist"), [])
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some-boxed-glist"), [])
+ 
+         list_ = [GLib.MININT, 42, GLib.MAXINT]
+-        self.set_prop(self.obj, "some-boxed-glist", list_)
+-        self.assertEqual(self.get_prop(self.obj, "some-boxed-glist"), list_)
+-        self.set_prop(self.obj, "some-boxed-glist", [])
+-        self.assertEqual(self.get_prop(self.obj, "some-boxed-glist"), [])
++        self.set_prop(obj, "some-boxed-glist", list_)
++        self.assertEqual(self.get_prop(obj, "some-boxed-glist"), list_)
++        self.set_prop(obj, "some-boxed-glist", [])
++        self.assertEqual(self.get_prop(obj, "some-boxed-glist"), [])
+ 
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-boxed-glist", 1)
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-boxed-glist", "foo")
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-boxed-glist", ["a"])
++        self.assertRaises(TypeError, self.set_prop, obj, "some-boxed-glist", 1)
++        self.assertRaises(TypeError, self.set_prop, obj, "some-boxed-glist", "foo")
++        self.assertRaises(TypeError, self.set_prop, obj, "some-boxed-glist", ["a"])
+ 
+     def test_annotated_glist(self):
+         obj = Regress.TestObj()
+@@ -1402,23 +1416,22 @@ class CPropertiesTestBase:
+         self.assertEqual(self.get_prop(obj, "some-boxed-glist"), list_)
+ 
+     def test_variant(self):
+-        self.assertEqual(self.get_prop(self.obj, "some-variant"), None)
++        obj = GIMarshallingTests.PropertiesObject()
++        self.assertEqual(self.get_prop(obj, "some-variant"), None)
+ 
+-        self.set_prop(self.obj, "some-variant", GLib.Variant("o", "/myobj"))
+-        self.assertEqual(self.get_prop(self.obj, "some-variant").get_type_string(), "o")
+-        self.assertEqual(
+-            self.get_prop(self.obj, "some-variant").print_(False), "'/myobj'"
+-        )
++        self.set_prop(obj, "some-variant", GLib.Variant("o", "/myobj"))
++        self.assertEqual(self.get_prop(obj, "some-variant").get_type_string(), "o")
++        self.assertEqual(self.get_prop(obj, "some-variant").print_(False), "'/myobj'")
+ 
+-        self.set_prop(self.obj, "some-variant", None)
+-        self.assertEqual(self.get_prop(self.obj, "some-variant"), None)
++        self.set_prop(obj, "some-variant", None)
++        self.assertEqual(self.get_prop(obj, "some-variant"), None)
+ 
+         obj = GIMarshallingTests.PropertiesObject(some_variant=GLib.Variant("b", True))
+         self.assertEqual(self.get_prop(obj, "some-variant").get_type_string(), "b")
+         self.assertEqual(self.get_prop(obj, "some-variant").get_boolean(), True)
+ 
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-variant", "foo")
+-        self.assertRaises(TypeError, self.set_prop, self.obj, "some-variant", 23)
++        self.assertRaises(TypeError, self.set_prop, obj, "some-variant", "foo")
++        self.assertRaises(TypeError, self.set_prop, obj, "some-variant", 23)
+ 
+         self.assertEqual(self.get_prop(obj, "some-variant").get_type_string(), "b")
+         self.assertEqual(self.get_prop(obj, "some-variant").get_boolean(), True)
+diff --git a/tests/test_repository.py b/tests/test_repository.py
+index f1e3f3f7..8cc5cece 100644
+--- a/tests/test_repository.py
++++ b/tests/test_repository.py
+@@ -21,6 +21,8 @@
+ import unittest
+ from collections import abc
+ 
++import pytest
++
+ import gi._gi as GIRepository
+ from gi.module import repository as repo
+ from gi.repository import GObject
+@@ -415,6 +417,7 @@ class Test(unittest.TestCase):
+         self.assertTrue(hasattr(GIRepository, "FunctionInfoFlags"))
+         self.assertTrue(hasattr(GIRepository, "TypeTag"))
+ 
++    @pytest.mark.thread_unsafe
+     def test_introspected_argument_info(self):
+         self.assertTrue(
+             isinstance(IntrospectedRepository.Argument.__info__, GIRepository.UnionInfo)
+diff --git a/tests/test_signal.py b/tests/test_signal.py
+index bca7d133..a1562cfc 100644
+--- a/tests/test_signal.py
++++ b/tests/test_signal.py
+@@ -5,6 +5,8 @@ import weakref
+ import threading
+ import time
+ 
++import pytest
++
+ from gi.repository import GObject, GLib, Regress, Gio
+ from gi import _signalhelper as signalhelper
+ from gi.module import repository as repo
+@@ -158,9 +160,9 @@ class TestAccumulator(unittest.TestCase):
+         # the following handler will not be called because handler2
+         # returns True, so it should stop the emission.
+         inst.my_other_acc_signal.connect(self._true_handler3)
+-        self.__true_val = None
++        inst.__true_val = None
+         inst.my_other_acc_signal.emit()
+-        self.assertEqual(self.__true_val, 2)
++        self.assertEqual(inst.__true_val, 2)
+ 
+     def test_accumulator_first_wins(self):
+         # First signal hit will always win
+@@ -168,20 +170,20 @@ class TestAccumulator(unittest.TestCase):
+         inst.my_acc_first_wins.connect(self._true_handler3)
+         inst.my_acc_first_wins.connect(self._true_handler1)
+         inst.my_acc_first_wins.connect(self._true_handler2)
+-        self.__true_val = None
++        inst.__true_val = None
+         inst.my_acc_first_wins.emit()
+-        self.assertEqual(self.__true_val, 3)
++        self.assertEqual(inst.__true_val, 3)
+ 
+     def _true_handler1(self, obj):
+-        self.__true_val = 1
++        obj.__true_val = 1
+         return False
+ 
+     def _true_handler2(self, obj):
+-        self.__true_val = 2
++        obj.__true_val = 2
+         return True
+ 
+     def _true_handler3(self, obj):
+-        self.__true_val = 3
++        obj.__true_val = 3
+         return False
+ 
+ 
+@@ -211,6 +213,7 @@ class F(GObject.GObject):
+         self.status += 1
+ 
+ 
++@pytest.mark.thread_unsafe  # add emission hook
+ class TestEmissionHook(unittest.TestCase):
+     def test_add(self):
+         self.hook = True
+@@ -371,85 +374,102 @@ class TestMatching(unittest.TestCase):
+ 
+ 
+ class TestClosures(unittest.TestCase):
+-    def setUp(self):
+-        self.count = 0
+-        self.emission_stopped = False
+-        self.emission_error = False
+-        self.handler_pending = False
+-
+-    def _callback_handler_pending(self, e):
+-        signal_id, detail = GObject.signal_parse_name("signal", e, True)
+-        self.handler_pending = GObject.signal_has_handler_pending(
+-            e, signal_id, detail, may_be_blocked=False
+-        )
+-
+-    def _callback(self, e):
+-        self.count += 1
+-
+-    def _callback_stop_emission(self, obj, prop, stop_it):
+-        if stop_it:
+-            obj.stop_emission_by_name("notify::prop")
+-            self.emission_stopped = True
+-        else:
+-            self.count += 1
+-
+-    def _callback_invalid_stop_emission_name(self, obj, prop):
+-        with capture_glib_warnings(allow_warnings=True, allow_criticals=True) as warn:
+-            obj.stop_emission_by_name("notasignal::baddetail")
+-            self.emission_error = True
+-            self.assertTrue(warn)
+-
+     def test_disconnect_by_func(self):
++        count = 0
+         e = E()
+-        e.connect("signal", self._callback)
+-        e.disconnect_by_func(self._callback)
++
++        def _callback(e):
++            nonlocal count
++            count += 1
++
++        e.connect("signal", _callback)
++        e.disconnect_by_func(_callback)
+         e.emit("signal")
+-        self.assertEqual(self.count, 0)
++        self.assertEqual(count, 0)
+ 
+     def test_disconnect(self):
++        count = 0
+         e = E()
+-        handler_id = e.connect("signal", self._callback)
++
++        def _callback(e):
++            nonlocal count
++            count += 1
++
++        handler_id = e.connect("signal", _callback)
+         self.assertTrue(e.handler_is_connected(handler_id))
+         e.disconnect(handler_id)
+         e.emit("signal")
+-        self.assertEqual(self.count, 0)
++        self.assertEqual(count, 0)
+         self.assertFalse(e.handler_is_connected(handler_id))
+ 
+     def test_stop_emission_by_name(self):
++        emission_stopped = False
++        count = 0
+         e = E()
+ 
++        def _callback_stop_emission(obj, prop, stop_it):
++            if stop_it:
++                nonlocal emission_stopped
++                obj.stop_emission_by_name("notify::prop")
++                emission_stopped = True
++            else:
++                nonlocal count
++                count += 1
++
+         # Sandwich a callback that stops emission in between a callback that increments
+-        e.connect("notify::prop", self._callback_stop_emission, False)
+-        e.connect("notify::prop", self._callback_stop_emission, True)
+-        e.connect("notify::prop", self._callback_stop_emission, False)
++        e.connect("notify::prop", _callback_stop_emission, False)
++        e.connect("notify::prop", _callback_stop_emission, True)
++        e.connect("notify::prop", _callback_stop_emission, False)
+ 
+         e.set_property("prop", 1234)
+         self.assertEqual(e.get_property("prop"), 1234)
+-        self.assertEqual(self.count, 1)
+-        self.assertTrue(self.emission_stopped)
++        self.assertEqual(count, 1)
++        self.assertTrue(emission_stopped)
+ 
+     def test_stop_emission_by_name_error(self):
++        emission_error = False
+         e = E()
+ 
+-        e.connect("notify::prop", self._callback_invalid_stop_emission_name)
++        def _callback_invalid_stop_emission_name(obj, prop):
++            nonlocal emission_error
++            with capture_glib_warnings(
++                allow_warnings=True, allow_criticals=True
++            ) as warn:
++                obj.stop_emission_by_name("notasignal::baddetail")
++                emission_error = True
++                self.assertTrue(warn)
++
++        e.connect("notify::prop", _callback_invalid_stop_emission_name)
+         with capture_glib_warnings():
+             e.set_property("prop", 1234)
+-        self.assertTrue(self.emission_error)
++        self.assertTrue(emission_error)
+ 
+     def test_handler_block(self):
++        count = 0
+         e = E()
+-        e.connect("signal", self._callback)
+-        e.handler_block_by_func(self._callback)
++
++        def _callback(e):
++            nonlocal count
++            count += 1
++
++        e.connect("signal", _callback)
++        e.handler_block_by_func(_callback)
+         e.emit("signal")
+-        self.assertEqual(self.count, 0)
++        self.assertEqual(count, 0)
+ 
+     def test_handler_unblock(self):
++        count = 0
+         e = E()
+-        handler_id = e.connect("signal", self._callback)
++
++        def _callback(e):
++            nonlocal count
++            count += 1
++
++        handler_id = e.connect("signal", _callback)
+         e.handler_block(handler_id)
+-        e.handler_unblock_by_func(self._callback)
++        e.handler_unblock_by_func(_callback)
+         e.emit("signal")
+-        self.assertEqual(self.count, 1)
++        self.assertEqual(count, 1)
+ 
+     def test_handler_block_method(self):
+         # Filed as #375589
+@@ -492,30 +512,50 @@ class TestClosures(unittest.TestCase):
+         self.assertEqual(data, "\02\00\01")
+ 
+     def test_handler_pending(self):
++        handler_pending = False
++        count = 0
+         obj = F()
+-        obj.connect("signal", self._callback_handler_pending)
+-        obj.connect("signal", self._callback)
+ 
+-        self.assertEqual(self.count, 0)
+-        self.assertEqual(self.handler_pending, False)
++        def _callback_handler_pending(e):
++            nonlocal handler_pending
++            signal_id, detail = GObject.signal_parse_name("signal", e, True)
++            handler_pending = GObject.signal_has_handler_pending(
++                e, signal_id, detail, may_be_blocked=False
++            )
++
++        def _callback(e):
++            nonlocal count
++            count += 1
++
++        obj.connect("signal", _callback_handler_pending)
++        obj.connect("signal", _callback)
++
++        self.assertEqual(count, 0)
++        self.assertEqual(handler_pending, False)
+ 
+         obj.emit("signal")
+-        self.assertEqual(self.count, 1)
+-        self.assertEqual(self.handler_pending, True)
++        self.assertEqual(count, 1)
++        self.assertEqual(handler_pending, True)
+ 
+     def test_signal_handlers_destroy(self):
++        count = 0
+         obj = F()
+-        obj.connect("signal", self._callback)
+-        obj.connect("signal", self._callback)
+-        obj.connect("signal", self._callback)
++
++        def _callback(e):
++            nonlocal count
++            count += 1
++
++        obj.connect("signal", _callback)
++        obj.connect("signal", _callback)
++        obj.connect("signal", _callback)
+ 
+         obj.emit("signal")
+-        self.assertEqual(self.count, 3)
++        self.assertEqual(count, 3)
+ 
+         # count should remain at 3 after all handlers are destroyed
+         GObject.signal_handlers_destroy(obj)
+         obj.emit("signal")
+-        self.assertEqual(self.count, 3)
++        self.assertEqual(count, 3)
+ 
+ 
+ class SigPropClass(GObject.GObject):
+@@ -608,124 +648,133 @@ class CM(GObject.GObject):
+ 
+ 
+ class _TestCMarshaller:
+-    def setUp(self):
+-        self.obj = CM()
+-        testhelper.connectcallbacks(self.obj)
++    def new_obj(self):
++        obj = CM()
++        testhelper.connectcallbacks(obj)
++        return obj
+ 
+     def test_test1(self):
+-        self.obj.emit("test1")
++        self.new_obj().emit("test1")
+ 
+     def test_test2(self):
+-        self.obj.emit("test2", "string")
++        self.new_obj().emit("test2", "string")
+ 
+     def test_test3(self):
+-        rv = self.obj.emit("test3", 42.0)
++        obj = self.new_obj()
++        rv = obj.emit("test3", 42.0)
+         self.assertEqual(rv, 20)
+ 
+     def test_test4(self):
+-        self.obj.emit("test4", True, 10, 3.14, 1.78, 20, 30, 31)
++        obj = self.new_obj()
++        obj.emit("test4", True, 10, 3.14, 1.78, 20, 30, 31)
+ 
+     def test_float(self):
+-        rv = self.obj.emit("test-float", 1.234)
++        obj = self.new_obj()
++        rv = obj.emit("test-float", 1.234)
+         self.assertTrue(rv >= 1.233999 and rv <= 1.2400001, rv)
+ 
+     def test_double(self):
+-        rv = self.obj.emit("test-double", 1.234)
++        obj = self.new_obj()
++        rv = obj.emit("test-double", 1.234)
+         self.assertEqual(rv, 1.234)
+ 
+     def test_int64(self):
+-        rv = self.obj.emit("test-int64", 102030405)
++        obj = self.new_obj()
++        rv = obj.emit("test-int64", 102030405)
+         self.assertEqual(rv, 102030405)
+ 
+-        rv = self.obj.emit("test-int64", GLib.MAXINT64)
++        rv = obj.emit("test-int64", GLib.MAXINT64)
+         self.assertEqual(rv, GLib.MAXINT64 - 1)
+ 
+-        rv = self.obj.emit("test-int64", GLib.MININT64)
++        rv = obj.emit("test-int64", GLib.MININT64)
+         self.assertEqual(rv, GLib.MININT64)
+ 
+     def test_string(self):
+-        rv = self.obj.emit("test-string", "str")
++        obj = self.new_obj()
++        rv = obj.emit("test-string", "str")
+         self.assertEqual(rv, "str")
+ 
+     def test_object(self):
+-        rv = self.obj.emit("test-object", self)
++        obj = self.new_obj()
++        rv = obj.emit("test-object", self)
+         self.assertEqual(rv, self)
+ 
+     def test_paramspec(self):
+-        rv = self.obj.emit("test-paramspec")
++        obj = self.new_obj()
++        rv = obj.emit("test-paramspec")
+         self.assertEqual(rv.name, "test-param")
+         self.assertEqual(rv.nick, "test")
+ 
+     def test_paramspec_in(self):
++        obj = self.new_obj()
+         rv = GObject.param_spec_boolean(
+             "mybool", "test-bool", "do something", True, GObject.ParamFlags.READABLE
+         )
+ 
+-        rv2 = self.obj.emit("test-paramspec-in", rv)
++        rv2 = obj.emit("test-paramspec-in", rv)
+         self.assertEqual(type(rv), type(rv2))
+         self.assertEqual(rv2.name, "mybool")
+         self.assertEqual(rv2.nick, "test-bool")
+ 
+     def test_C_paramspec(self):
+-        self.notify_called = False
++        obj = self.new_obj()
++        notify_called = False
+ 
+         def cb_notify(obj, prop):
+-            self.notify_called = True
+-            self.assertEqual(obj, self.obj)
++            nonlocal notify_called
++            notify_called = True
++            self.assertEqual(obj, obj)
+             self.assertEqual(prop.name, "testprop")
+ 
+-        self.obj.connect("notify", cb_notify)
+-        self.obj.set_property("testprop", 42)
+-        self.assertTrue(self.notify_called)
++        obj.connect("notify", cb_notify)
++        obj.set_property("testprop", 42)
++        self.assertTrue(notify_called)
+ 
+     def test_gvalue(self):
++        obj = self.new_obj()
+         # implicit int
+-        rv = self.obj.emit("test-gvalue", 42)
++        rv = obj.emit("test-gvalue", 42)
+         self.assertEqual(rv, 42)
+ 
+         # explicit float
+         v = GObject.Value(GObject.TYPE_FLOAT, 1.234)
+-        rv = self.obj.emit("test-gvalue", v)
++        rv = obj.emit("test-gvalue", v)
+         self.assertAlmostEqual(rv, 1.234, places=4)
+ 
+         # implicit float
+-        rv = self.obj.emit("test-gvalue", 1.234)
++        rv = obj.emit("test-gvalue", 1.234)
+         self.assertAlmostEqual(rv, 1.234, places=4)
+ 
+         # explicit int64
+         v = GObject.Value(GObject.TYPE_INT64, GLib.MAXINT64)
+-        rv = self.obj.emit("test-gvalue", v)
++        rv = obj.emit("test-gvalue", v)
+         self.assertEqual(rv, GLib.MAXINT64)
+ 
+         # explicit uint64
+         v = GObject.Value(GObject.TYPE_UINT64, GLib.MAXUINT64)
+-        rv = self.obj.emit("test-gvalue", v)
++        rv = obj.emit("test-gvalue", v)
+         self.assertEqual(rv, GLib.MAXUINT64)
+ 
+     @unittest.expectedFailure  # https://bugzilla.gnome.org/show_bug.cgi?id=705291
+     def test_gvalue_implicit_int64(self):
++        obj = self.new_obj()
+         # implicit int64
+-        rv = self.obj.emit("test-gvalue", GLib.MAXINT64)
++        rv = obj.emit("test-gvalue", GLib.MAXINT64)
+         self.assertEqual(rv, GLib.MAXINT64)
+ 
+         # implicit uint64
+-        rv = self.obj.emit("test-gvalue", GLib.MAXUINT64)
++        rv = obj.emit("test-gvalue", GLib.MAXUINT64)
+         self.assertEqual(rv, GLib.MAXUINT64)
+ 
+     def test_gvalue_ret(self):
++        obj = self.new_obj()
++        self.assertEqual(obj.emit("test-gvalue-ret", GObject.TYPE_INT), GLib.MAXINT)
++        self.assertEqual(obj.emit("test-gvalue-ret", GObject.TYPE_UINT), GLib.MAXUINT)
++        self.assertEqual(obj.emit("test-gvalue-ret", GObject.TYPE_INT64), GLib.MAXINT64)
+         self.assertEqual(
+-            self.obj.emit("test-gvalue-ret", GObject.TYPE_INT), GLib.MAXINT
+-        )
+-        self.assertEqual(
+-            self.obj.emit("test-gvalue-ret", GObject.TYPE_UINT), GLib.MAXUINT
++            obj.emit("test-gvalue-ret", GObject.TYPE_UINT64), GLib.MAXUINT64
+         )
+-        self.assertEqual(
+-            self.obj.emit("test-gvalue-ret", GObject.TYPE_INT64), GLib.MAXINT64
+-        )
+-        self.assertEqual(
+-            self.obj.emit("test-gvalue-ret", GObject.TYPE_UINT64), GLib.MAXUINT64
+-        )
+-        self.assertEqual(self.obj.emit("test-gvalue-ret", GObject.TYPE_STRING), "hello")
++        self.assertEqual(obj.emit("test-gvalue-ret", GObject.TYPE_STRING), "hello")
+ 
+ 
+ class TestCMarshaller(_TestCMarshaller, unittest.TestCase):
+@@ -781,12 +830,6 @@ class TestSignalDecorator(unittest.TestCase):
+         def on_notify(self, obj, prop):
+             self.notify_called = True
+ 
+-    def setUp(self):
+-        self.unnamedCalled = False
+-
+-    def onUnnamed(self, obj):
+-        self.unnamedCalled = True
+-
+     def test_disconnect(self):
+         decorated = self.Decorated()
+         id_ = decorated.pushed.connect(lambda *args: None)
+@@ -848,11 +891,17 @@ class TestSignalDecorator(unittest.TestCase):
+         self.assertEqual(str(self.Decorated.unnamed), "unnamed")
+ 
+     def test_unnamed_signal_gets_called(self):
++        unnamedCalled = False
+         obj = self.Decorated()
+-        obj.connect("unnamed", self.onUnnamed)
+-        self.assertEqual(self.unnamedCalled, False)
++
++        def onUnnamed(obj):
++            nonlocal unnamedCalled
++            unnamedCalled = True
++
++        obj.connect("unnamed", onUnnamed)
++        self.assertEqual(unnamedCalled, False)
+         obj.emit("unnamed")
+-        self.assertEqual(self.unnamedCalled, True)
++        self.assertEqual(unnamedCalled, True)
+ 
+     def test_overridden_signal(self):
+         # Test that the pushed signal is called in with super and the override
+@@ -866,6 +915,7 @@ class TestSignalDecorator(unittest.TestCase):
+         self.assertTrue(obj.notify_called)
+ 
+ 
++@pytest.mark.thread_unsafe
+ class TestSignalConnectors(unittest.TestCase):
+     class CustomButton(GObject.GObject):
+         on_notify_called = False
+@@ -1057,6 +1107,7 @@ class TestConnectDataIntrospected(unittest.TestCase, _ConnectDataTestBase):
+     Object = Regress.TestObj
+ 
+ 
++@pytest.mark.thread_unsafe
+ class TestInstallSignals(unittest.TestCase):
+     # These tests only test how signalhelper.install_signals works
+     # with the __gsignals__ dict and therefore does not need to use
+@@ -1173,6 +1224,7 @@ class TestSignalModuleLevelFunctions(unittest.TestCase):
+         # Invalid signal names return 0 instead of raising
+         self.assertEqual(GObject.signal_lookup("NOT_A_SIGNAL_NAME", C), 0)
+ 
++    @pytest.mark.thread_unsafe
+     def test_signal_query(self):
+         (my_signal_id,) = GObject.signal_list_ids(C)
+ 
+@@ -1344,6 +1396,7 @@ class TestIntrospectedSignals(unittest.TestCase):
+         self.assertIsNone(other_obj2)
+ 
+ 
++@pytest.mark.thread_unsafe
+ class TestIntrospectedSignalsIssue158(unittest.TestCase):
+     """The test for https://gitlab.gnome.org/GNOME/pygobject/issues/158."""
+ 
+@@ -1381,8 +1434,11 @@ class TestIntrospectedSignalsIssue158(unittest.TestCase):
+         gc_thread = threading.Thread(target=self._gc_thread)
+         gc_thread.start()
+ 
++        def _callback(e):
++            pass
++
+         for _ in range(8):
+-            handlers = [obj.connect(sig, self._callback) for sig in self._obj_sig_names]
++            handlers = [obj.connect(sig, _callback) for sig in self._obj_sig_names]
+             time.sleep(0.010)
+             while len(handlers) > 0:
+                 obj.disconnect(handlers.pop())
+diff --git a/tests/test_source.py b/tests/test_source.py
+index 8dcd8099..92e1fb6f 100644
+--- a/tests/test_source.py
++++ b/tests/test_source.py
+@@ -3,6 +3,8 @@ import gc
+ import unittest
+ import warnings
+ 
++import pytest
++
+ from gi.repository import GLib
+ from gi import PyGIDeprecationWarning
+ 
+@@ -47,6 +49,7 @@ class TestSource(unittest.TestCase):
+         timeout.set_callback(self.timeout_callback, loop)
+         timeout.attach()
+ 
++    @pytest.mark.thread_unsafe
+     def test_sources(self):
+         loop = GLib.MainLoop()
+ 
+@@ -75,6 +78,7 @@ class TestSource(unittest.TestCase):
+         self.assertTrue(m.is_destroyed())
+         self.assertTrue(idle.is_destroyed())
+ 
++    @pytest.mark.thread_unsafe
+     def test_source_prepare(self):
+         # this test may not terminate if prepare() is wrapped incorrectly
+         dispatched = [False]
+@@ -128,6 +132,7 @@ class TestSource(unittest.TestCase):
+         gc.collect()
+         self.assertTrue(s.is_destroyed())
+ 
++    @pytest.mark.thread_unsafe
+     def test_remove(self):
+         s = GLib.idle_add(dir)
+         self.assertEqual(GLib.source_remove(s), True)
+@@ -261,6 +266,7 @@ class TestSource(unittest.TestCase):
+     @unittest.skipIf(
+         sys.implementation.name == "pypy", "PyPy doesn't __del__ immediately"
+     )
++    @pytest.mark.thread_unsafe
+     def test_python_unref_during_dispatch(self):
+         # Tests a Python derived Source which is free'd in the context of
+         # Python, while being dispatched
+@@ -312,6 +318,7 @@ class TestSource(unittest.TestCase):
+ 
+ @unittest.skipIf(sys.platform == "darwin", "hangs")
+ class TestUserData(unittest.TestCase):
++    @pytest.mark.thread_unsafe
+     def test_idle_no_data(self):
+         ml = GLib.MainLoop()
+ 
+@@ -324,6 +331,7 @@ class TestUserData(unittest.TestCase):
+         )
+         ml.run()
+ 
++    @pytest.mark.thread_unsafe
+     def test_timeout_no_data(self):
+         ml = GLib.MainLoop()
+ 
+@@ -336,6 +344,7 @@ class TestUserData(unittest.TestCase):
+         )
+         ml.run()
+ 
++    @pytest.mark.thread_unsafe
+     def test_idle_data(self):
+         ml = GLib.MainLoop()
+ 
+@@ -351,6 +360,7 @@ class TestUserData(unittest.TestCase):
+         ml.run()
+         self.assertTrue(data["called"])
+ 
++    @pytest.mark.thread_unsafe
+     def test_idle_multidata(self):
+         ml = GLib.MainLoop()
+ 
+@@ -368,6 +378,7 @@ class TestUserData(unittest.TestCase):
+         self.assertTrue(data["called"])
+         self.assertEqual(data["data2"], "hello")
+ 
++    @pytest.mark.thread_unsafe
+     def test_timeout_data(self):
+         ml = GLib.MainLoop()
+ 
+@@ -383,6 +394,7 @@ class TestUserData(unittest.TestCase):
+         ml.run()
+         self.assertTrue(data["called"])
+ 
++    @pytest.mark.thread_unsafe
+     def test_timeout_multidata(self):
+         ml = GLib.MainLoop()
+ 
+@@ -400,6 +412,7 @@ class TestUserData(unittest.TestCase):
+         self.assertTrue(data["called"])
+         self.assertEqual(data["data2"], "hello")
+ 
++    @pytest.mark.thread_unsafe
+     def test_idle_no_data_priority(self):
+         ml = GLib.MainLoop()
+ 
+@@ -412,6 +425,7 @@ class TestUserData(unittest.TestCase):
+         )
+         ml.run()
+ 
++    @pytest.mark.thread_unsafe
+     def test_timeout_no_data_priority(self):
+         ml = GLib.MainLoop()
+ 
+@@ -424,6 +438,7 @@ class TestUserData(unittest.TestCase):
+         )
+         ml.run()
+ 
++    @pytest.mark.thread_unsafe
+     def test_idle_data_priority(self):
+         ml = GLib.MainLoop()
+ 
+@@ -439,6 +454,7 @@ class TestUserData(unittest.TestCase):
+         ml.run()
+         self.assertTrue(data["called"])
+ 
++    @pytest.mark.thread_unsafe
+     def test_timeout_data_priority(self):
+         ml = GLib.MainLoop()
+ 
+@@ -457,6 +473,7 @@ class TestUserData(unittest.TestCase):
+     def cb_no_data(self):
+         self.loop.quit()
+ 
++    @pytest.mark.thread_unsafe
+     def test_idle_method_callback_no_data(self):
+         self.loop = GLib.MainLoop()
+         GLib.idle_add(self.cb_no_data)
+@@ -466,6 +483,7 @@ class TestUserData(unittest.TestCase):
+         data["called"] = True
+         self.loop.quit()
+ 
++    @pytest.mark.thread_unsafe
+     def test_idle_method_callback_with_data(self):
+         self.loop = GLib.MainLoop()
+         data = {}
+diff --git a/tests/test_subprocess.py b/tests/test_subprocess.py
+index 84e5567e..7cf7ac8d 100644
+--- a/tests/test_subprocess.py
++++ b/tests/test_subprocess.py
+@@ -107,6 +107,7 @@ class TestProcess(unittest.TestCase):
+         self.assertEqual(res[2], cb)
+         self.assertSequenceEqual(res[3], [12345])
+ 
++    @pytest.mark.thread_unsafe  # runs main loop
+     def test_child_watch_no_data(self):
+         def cb(pid, status):
+             self.status = status
+@@ -126,6 +127,7 @@ class TestProcess(unittest.TestCase):
+         self.loop.run()
+         self.assertEqual(self.status, 0)
+ 
++    @pytest.mark.thread_unsafe  # runs main loop
+     def test_child_watch_with_data(self):
+         def cb(pid, status, data):
+             self.status = status
+@@ -212,6 +214,7 @@ class TestProcess(unittest.TestCase):
+ 
+ 
+ @pytest.mark.skipif(os.name == "nt", reason="not on Windows")
++@pytest.mark.thread_unsafe
+ def test_spawn_async_fds_with_child_setup(tmp_path):
+     callback_file = tmp_path / "child_setup_called"
+ 
+@@ -259,6 +262,7 @@ def test_os_kill_with_pid():
+     os.kill(pid, signal.SIGTERM)
+ 
+ 
++@pytest.mark.thread_unsafe
+ def test_close_pid_when_deleted(monkeypatch):
+     gc.collect()  # for Pypy
+ 
+diff --git a/tests/test_thread.py b/tests/test_thread.py
+index 5e2185e6..3ecc1a7f 100644
+--- a/tests/test_thread.py
++++ b/tests/test_thread.py
+@@ -1,4 +1,5 @@
+ import unittest
++import pytest
+ 
+ from gi.repository import GLib
+ 
+@@ -22,6 +23,7 @@ class TestThread(unittest.TestCase):
+         self.obj.connect("from-thread", self.from_thread_cb)
+         self.obj.emit("emit-signal")
+ 
++    @pytest.mark.thread_unsafe  # runs main loop
+     def test_extension_module(self):
+         GLib.idle_add(self.idle_cb)
+         GLib.timeout_add(2000, self.timeout_cb)

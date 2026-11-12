@@ -1,3 +1,4 @@
+upstream-parallel-test-contracts.patch
 free-threaded-lifetime-tests.patch
 free-threaded-upstream-mr565.patch
 free-threaded-callable-cache-scope.patch

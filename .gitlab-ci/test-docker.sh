@@ -4,6 +4,20 @@ set -e
 
 python --version
 
+# Backport the merged CPython header fixes to the affected released toolchain.
+# Keep compiler diagnostics enabled for Pycairo and all subsequent builds.
+if python -c 'import sys; sys.exit(sys.implementation.name != "cpython" or sys.version_info[:3] != (3, 15, 2))'; then
+    python_headers="$(mktemp -d)"
+    git clone --depth=1 --branch=codex/release-3.15.2-header-fix \
+        https://github.com/StableKite/cpython.git "$python_headers/cpython"
+    git -C "$python_headers/cpython" rev-parse HEAD
+    grep -Eq '^#define PY_VERSION[[:space:]]+"3\.15\.2"$' "$python_headers/cpython/Include/patchlevel.h"
+    python_include="$(python -c 'import sysconfig; print(sysconfig.get_path("include"))')"
+    for header in pyport.h pymacro.h cpython/pyatomic.h; do
+        sudo install -m644 "$python_headers/cpython/Include/$header" "$python_include/$header"
+    done
+fi
+
 SOURCE_DIR="$(pwd)"
 COV_DIR="${SOURCE_DIR}/coverage"
 COV_KEY="${CI_JOB_NAME_SLUG}"

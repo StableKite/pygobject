@@ -124,6 +124,10 @@ class IntrospectionModule(ModuleType):
 
         if isinstance(info, EnumInfo):
             with self._lock:
+                # Another caller may have populated the module while we waited.
+                # Enums without a GType cannot use g_type.pytype as their cache.
+                if name in self.__dict__:
+                    return self.__dict__[name]
                 # Resolving the GType may run its C registration function.
                 # Serialize that first use along with creation of the wrapper.
                 g_type = info.get_g_type()
@@ -141,6 +145,9 @@ class IntrospectionModule(ModuleType):
 
                 if g_type != TYPE_NONE:
                     g_type.pytype = wrapper
+
+                self.__dict__[name] = wrapper
+                return wrapper
 
         elif isinstance(info, RegisteredTypeInfo):
             with self._lock:
@@ -180,6 +187,8 @@ class IntrospectionModule(ModuleType):
                 raise NotImplementedError(info)
 
             with self._lock:
+                if name in self.__dict__:
+                    return self.__dict__[name]
                 # Check if there is already a Python wrapper that is not a parent class
                 # of the wrapper being created. If it is a parent, it is ok to clobber
                 # g_type.pytype with a new child class wrapper of the existing parent.
@@ -201,6 +210,9 @@ class IntrospectionModule(ModuleType):
                 # Register the new Python wrapper.
                 if g_type != TYPE_NONE:
                     g_type.pytype = wrapper
+
+                self.__dict__[name] = wrapper
+                return wrapper
 
         elif isinstance(info, FunctionInfo):
             wrapper = info

@@ -5,6 +5,24 @@ import pytest
 import testhelper
 
 from gi.repository import GObject
+from gi.module import IntrospectionModule
+
+
+@pytest.mark.thread_unsafe(reason="starts its own synchronized worker threads")
+def test_concurrent_unregistered_enum_wrapper():
+    """A cold enum without a GType still has one wrapper per module."""
+    module = IntrospectionModule("GIMarshallingTests")
+    barrier = threading.Barrier(8)
+
+    def resolve(_):
+        barrier.wait(timeout=10)
+        return module.NoTypeFlags
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        wrappers = list(pool.map(resolve, range(8)))
+    assert all(wrapper is wrappers[0] for wrapper in wrappers)
+    assert module.NoTypeFlags is wrappers[0]
+    assert isinstance(module.NoTypeFlags.VALUE1, wrappers[0])
 
 
 @pytest.mark.thread_unsafe(reason="starts its own synchronized worker threads")

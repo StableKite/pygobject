@@ -19,6 +19,7 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "pygi-repository.h"
 #include "pygflags.h"
 
 #include "pygi-type.h"
@@ -116,7 +117,7 @@ pyg_flags_add_full (PyObject *module, const char *typename, GType gtype,
         return NULL;
     }
     if (info != NULL) {
-        GType info_gtype = gi_registered_type_info_get_g_type (
+        GType info_gtype = pygi_registered_type_info_get_g_type (
             GI_REGISTERED_TYPE_INFO (info));
 
         if (info_gtype != gtype) {

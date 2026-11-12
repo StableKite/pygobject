@@ -36,6 +36,11 @@ extern PyTypeObject PyGIRepository_Type;
 extern PyObject *PyGIRepositoryError;
 
 GIRepository *pygi_repository_get_default (void);
+void pygi_repository_lock (void);
+void pygi_repository_unlock (void);
+GType pygi_registered_type_info_get_g_type (GIRegisteredTypeInfo *info);
+GIBaseInfo *pygi_repository_find_by_gtype (GIRepository *repository,
+                                           GType gtype);
 
 int pygi_repository_register_types (PyObject *m);
 

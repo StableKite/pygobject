@@ -20,6 +20,7 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "pygi-repository.h"
 #include "pygi-argument.h"
 #include "pygi-basictype.h"
 #include "pygi-fundamental.h"
@@ -1330,7 +1331,7 @@ _wrap_gi_registered_type_info_get_g_type (PyGIBaseInfo *self)
 {
     GType type;
 
-    type = gi_registered_type_info_get_g_type (
+    type = pygi_registered_type_info_get_g_type (
         (GIRegisteredTypeInfo *)self->info);
 
     return pyg_type_wrapper_new (type);
@@ -1983,7 +1984,7 @@ _pygi_gi_registered_type_info_check_object (GIRegisteredTypeInfo *info,
         return 1;
     }
 
-    g_type = gi_registered_type_info_get_g_type (info);
+    g_type = pygi_registered_type_info_get_g_type (info);
     if (g_type != G_TYPE_NONE) {
         py_type = pygi_type_get_from_g_type (g_type);
     } else {

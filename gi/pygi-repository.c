@@ -29,6 +29,42 @@ PyObject *PyGIRepositoryError;
 
 PYGI_DEFINE_TYPE ("gi.Repository", PyGIRepository_Type, PyGIRepository);
 
+static GRecMutex repository_lock;
+
+void
+pygi_repository_lock (void)
+{
+    Py_BEGIN_ALLOW_THREADS;
+    g_rec_mutex_lock (&repository_lock);
+    Py_END_ALLOW_THREADS;
+}
+
+void
+pygi_repository_unlock (void)
+{
+    g_rec_mutex_unlock (&repository_lock);
+}
+
+GType
+pygi_registered_type_info_get_g_type (GIRegisteredTypeInfo *info)
+{
+    GType type;
+    pygi_repository_lock ();
+    type = gi_registered_type_info_get_g_type (info);
+    pygi_repository_unlock ();
+    return type;
+}
+
+GIBaseInfo *
+pygi_repository_find_by_gtype (GIRepository *repository, GType gtype)
+{
+    GIBaseInfo *info;
+    pygi_repository_lock ();
+    info = gi_repository_find_by_gtype (repository, gtype);
+    pygi_repository_unlock ();
+    return info;
+}
+
 
 static gpointer
 init_once_default_repository (gpointer user_data)
@@ -45,7 +81,9 @@ pygi_repository_get_default (void)
 {
     static GOnce once_default_repository = G_ONCE_INIT;
 
+    Py_BEGIN_ALLOW_THREADS;
     g_once (&once_default_repository, init_once_default_repository, NULL);
+    Py_END_ALLOW_THREADS;
 
     return once_default_repository.retval;
 }
@@ -90,7 +128,9 @@ _wrap_gi_repository_prepend_library_path (PyGIRepository *self, PyObject *args,
         return NULL;
     }
 
+    pygi_repository_lock ();
     gi_repository_prepend_library_path (self->repository, directory);
+    pygi_repository_unlock ();
 
     Py_RETURN_NONE;
 }
@@ -108,7 +148,9 @@ _wrap_gi_repository_prepend_search_path (PyGIRepository *self, PyObject *args,
         return NULL;
     }
 
+    pygi_repository_lock ();
     gi_repository_prepend_search_path (self->repository, directory);
+    pygi_repository_unlock ();
 
     Py_RETURN_NONE;
 }
@@ -129,8 +171,10 @@ _wrap_gi_repository_enumerate_versions (PyGIRepository *self, PyObject *args,
         return NULL;
     }
 
+    pygi_repository_lock ();
     versions =
         gi_repository_enumerate_versions (self->repository, namespace_, NULL);
+    pygi_repository_unlock ();
     ret = PyList_New (0);
     for (size_t i = 0; versions[i] != NULL; i++) {
         char *version = g_steal_pointer (&versions[i]);
@@ -165,8 +209,10 @@ _wrap_gi_repository_require (PyGIRepository *self, PyObject *args,
         flags |= GI_REPOSITORY_LOAD_FLAG_LAZY;
     }
 
+    pygi_repository_lock ();
     gi_repository_require (self->repository, namespace_, version, flags,
                            &error);
+    pygi_repository_unlock ();
     if (error != NULL) {
         PyErr_SetString (PyGIRepositoryError, error->message);
         g_error_free (error);
@@ -190,8 +236,11 @@ _wrap_gi_repository_is_registered (PyGIRepository *self, PyObject *args,
         return NULL;
     }
 
-    return pygi_gboolean_to_py (
-        gi_repository_is_registered (self->repository, namespace_, version));
+    pygi_repository_lock ();
+    gboolean registered =
+        gi_repository_is_registered (self->repository, namespace_, version);
+    pygi_repository_unlock ();
+    return pygi_gboolean_to_py (registered);
 }
 
 static PyObject *
@@ -230,7 +279,9 @@ _wrap_gi_repository_find_by_name (PyGIRepository *self, PyObject *args,
         Py_DECREF (is_keyword);
     }
 
+    pygi_repository_lock ();
     info = gi_repository_find_by_name (self->repository, namespace_, name);
+    pygi_repository_unlock ();
     g_free (trimmed_name);
 
     if (info == NULL) {
@@ -260,7 +311,9 @@ _wrap_gi_repository_get_infos (PyGIRepository *self, PyObject *args,
         return NULL;
     }
 
+    pygi_repository_lock ();
     n_infos = gi_repository_get_n_infos (self->repository, namespace_);
+    pygi_repository_unlock ();
     if (n_infos < 0) {
         PyErr_Format (PyExc_RuntimeError, "Namespace '%s' not loaded",
                       namespace_);
@@ -273,7 +326,9 @@ _wrap_gi_repository_get_infos (PyGIRepository *self, PyObject *args,
         GIBaseInfo *info;
         PyObject *py_info;
 
+        pygi_repository_lock ();
         info = gi_repository_get_info (self->repository, namespace_, i);
+        pygi_repository_unlock ();
         g_assert (info != NULL);
 
         py_info = _pygi_info_new (info);
@@ -305,8 +360,10 @@ _wrap_gi_repository_get_typelib_path (PyGIRepository *self, PyObject *args,
         return NULL;
     }
 
+    pygi_repository_lock ();
     typelib_path =
         gi_repository_get_typelib_path (self->repository, namespace_);
+    pygi_repository_unlock ();
     if (typelib_path == NULL) {
         PyErr_Format (PyExc_RuntimeError, "Namespace '%s' not loaded",
                       namespace_);
@@ -329,7 +386,9 @@ _wrap_gi_repository_get_version (PyGIRepository *self, PyObject *args,
         return NULL;
     }
 
+    pygi_repository_lock ();
     version = gi_repository_get_version (self->repository, namespace_);
+    pygi_repository_unlock ();
     if (version == NULL) {
         PyErr_Format (PyExc_RuntimeError, "Namespace '%s' not loaded",
                       namespace_);
@@ -346,7 +405,9 @@ _wrap_gi_repository_get_loaded_namespaces (PyGIRepository *self)
     PyObject *py_namespaces;
     gssize i;
 
+    pygi_repository_lock ();
     namespaces = gi_repository_get_loaded_namespaces (self->repository, NULL);
+    pygi_repository_unlock ();
 
     py_namespaces = PyList_New (0);
     for (i = 0; namespaces[i] != NULL; i++) {
@@ -379,8 +440,10 @@ _wrap_gi_repository_get_dependencies (PyGIRepository *self, PyObject *args,
 
     py_namespaces = PyList_New (0);
     /* Returns NULL in case of no dependencies */
+    pygi_repository_lock ();
     namespaces =
         gi_repository_get_dependencies (self->repository, namespace_, NULL);
+    pygi_repository_unlock ();
     if (namespaces == NULL) {
         return py_namespaces;
     }
@@ -415,8 +478,10 @@ _wrap_gi_repository_get_immediate_dependencies (PyGIRepository *self,
     }
 
     py_namespaces = PyList_New (0);
+    pygi_repository_lock ();
     namespaces = gi_repository_get_immediate_dependencies (self->repository,
                                                            namespace_, NULL);
+    pygi_repository_unlock ();
 
     for (i = 0; namespaces[i] != NULL; i++) {
         PyObject *py_namespace = pygi_utf8_to_py (namespaces[i]);

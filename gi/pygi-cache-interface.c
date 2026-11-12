@@ -18,6 +18,7 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "pygi-repository.h"
 #include "pygi-cache-private.h"
 #include "pygi-info.h"
 #include "pygi-type.h"
@@ -65,7 +66,7 @@ pygi_arg_interface_setup (
     iface_cache->interface_info = iface_info;
     iface_cache->arg_cache.type_tag = GI_TYPE_TAG_INTERFACE;
     iface_cache->type_name = _pygi_gi_base_info_get_fullname (base_info);
-    iface_cache->g_type = gi_registered_type_info_get_g_type (iface_info);
+    iface_cache->g_type = pygi_registered_type_info_get_g_type (iface_info);
     iface_cache->py_type = pygi_type_import_by_gi_info (base_info);
 
     if (g_type_is_a (iface_cache->g_type, G_TYPE_OBJECT)) {

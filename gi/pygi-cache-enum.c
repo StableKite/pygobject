@@ -18,6 +18,7 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "pygi-repository.h"
 #include "pygenum.h"
 #include "pygflags.h"
 #include "pygi-cache-private.h"
@@ -146,7 +147,7 @@ _pygi_marshal_from_py_interface_enum (PyGIInvokeState *state,
     PyGIInterfaceCache *iface_cache = (PyGIInterfaceCache *)arg_cache;
     GIBaseInfo *interface = NULL;
     GType enum_type =
-        gi_registered_type_info_get_g_type (iface_cache->interface_info);
+        pygi_registered_type_info_get_g_type (iface_cache->interface_info);
 
     if (pyg_enum_get_value (enum_type, py_arg, &c_int) != 0) {
         return FALSE;
@@ -207,7 +208,7 @@ _pygi_marshal_from_py_interface_flags (PyGIInvokeState *state,
     PyGIInterfaceCache *iface_cache = (PyGIInterfaceCache *)arg_cache;
     GIBaseInfo *interface;
     GType flags_type =
-        gi_registered_type_info_get_g_type (iface_cache->interface_info);
+        pygi_registered_type_info_get_g_type (iface_cache->interface_info);
 
     if (pyg_flags_get_value (flags_type, py_arg, &c_uint) != 0) {
         return FALSE;

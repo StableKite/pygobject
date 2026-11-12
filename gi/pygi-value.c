@@ -593,7 +593,7 @@ pyg_value_from_pyobject_with_error (GValue *value, PyObject *obj)
             }
 
             repository = pygi_repository_get_default ();
-            info = gi_repository_find_by_gtype (repository, value_type);
+            info = pygi_repository_find_by_gtype (repository, value_type);
 
             if (info && GI_IS_OBJECT_INFO (info)) {
                 set_value_func =
@@ -795,7 +795,7 @@ value_to_py_structured_type (const GValue *value, GType fundamental,
             return bm->fromvalue (value);
 
         repository = pygi_repository_get_default ();
-        info = gi_repository_find_by_gtype (repository, fundamental);
+        info = pygi_repository_find_by_gtype (repository, fundamental);
 
         if (info == NULL) break;
 

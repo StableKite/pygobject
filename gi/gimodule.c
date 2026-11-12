@@ -138,44 +138,72 @@ pyg_run_class_init (GType gtype, gpointer gclass, PyTypeObject *pyclass)
     return 0;
 }
 
+static GMutex type_name_lock;
+static GHashTable *pending_type_names;
+
 static char *
 get_type_name_for_class (PyTypeObject *class)
 {
     gint i, name_serial;
-    char name_serial_str[16];
     PyObject *module;
+    char *base_name;
     char *type_name = NULL;
 
-    /* make name for new GType */
-    name_serial = 1;
-    /* give up after 1000 tries, just in case.. */
-    while (name_serial < 1000) {
-        g_free (type_name);
-        g_snprintf (name_serial_str, 16, "-v%i", name_serial);
-        module = PyObject_GetAttrString ((PyObject *)class, "__module__");
-        if (module && PyUnicode_Check (module)) {
-            type_name =
-                g_strconcat (PyUnicode_AsUTF8 (module), ".", class->tp_name,
-                             name_serial > 1 ? name_serial_str : NULL, NULL);
+    /* Resolve Python attributes before locking: this may execute Python. */
+    module = PyObject_GetAttrString ((PyObject *)class, "__module__");
+    if (module && PyUnicode_Check (module)) {
+        const char *module_name = PyUnicode_AsUTF8 (module);
+        if (!module_name) {
             Py_DECREF (module);
-        } else {
-            if (module)
-                Py_DECREF (module);
-            else
-                PyErr_Clear ();
-            type_name = g_strconcat (class->tp_name,
-                                     name_serial > 1 ? name_serial_str : NULL,
-                                     NULL);
+            return NULL;
         }
-        /* convert '.' in type name to '+', which isn't banned (grumble) */
-        for (i = 0; type_name[i] != '\0'; i++)
-            if (type_name[i] == '.') type_name[i] = '+';
-        if (g_type_from_name (type_name) == 0)
-            break; /* we now have a unique name */
-        ++name_serial;
+        base_name = g_strconcat (module_name, ".", class->tp_name, NULL);
+    } else {
+        if (!module) PyErr_Clear ();
+        base_name = g_strdup (class->tp_name);
     }
+    Py_XDECREF (module);
+    for (i = 0; base_name[i] != '\0'; i++)
+        if (base_name[i] == '.') base_name[i] = '+';
 
+    /* Reserve the name until registration finishes. Checking only the GType
+     * registry lets another thread choose the same not-yet-registered name.
+     * No Python API or type initialization runs while this lock is held. */
+    Py_BEGIN_ALLOW_THREADS;
+    g_mutex_lock (&type_name_lock);
+    if (!pending_type_names)
+        pending_type_names = g_hash_table_new (g_str_hash, g_str_equal);
+    for (name_serial = 1; name_serial < 1000; name_serial++) {
+        g_free (type_name);
+        type_name = name_serial == 1
+                        ? g_strdup (base_name)
+                        : g_strdup_printf ("%s-v%i", base_name, name_serial);
+        if (!g_type_from_name (type_name)
+            && !g_hash_table_contains (pending_type_names, type_name))
+            break;
+    }
+    if (name_serial == 1000)
+        g_clear_pointer (&type_name, g_free);
+    else
+        g_hash_table_add (pending_type_names, type_name);
+    g_mutex_unlock (&type_name_lock);
+    Py_END_ALLOW_THREADS;
+    g_free (base_name);
+    if (!type_name)
+        PyErr_SetString (PyExc_RuntimeError,
+                         "could not find an unused GType name");
     return type_name;
+}
+
+static void
+release_type_name (char *type_name)
+{
+    Py_BEGIN_ALLOW_THREADS;
+    g_mutex_lock (&type_name_lock);
+    g_hash_table_remove (pending_type_names, type_name);
+    g_mutex_unlock (&type_name_lock);
+    Py_END_ALLOW_THREADS;
+    g_free (type_name);
 }
 
 static int
@@ -218,6 +246,10 @@ pyg_type_register (PyTypeObject *class, const char *type_name)
         new_type_name = (gchar *)type_name;
     else
         new_type_name = get_type_name_for_class (class);
+    if (!new_type_name) {
+        g_free (parent_interfaces);
+        return -1;
+    }
 
     /* set class_data that will be passed to the class_init function. */
     type_info.class_data = class;
@@ -235,12 +267,12 @@ pyg_type_register (PyTypeObject *class, const char *type_name)
                       "could not create new GType: %s (subclass of %s)",
                       new_type_name, g_type_name (parent_type));
 
-        if (type_name == NULL) g_free (new_type_name);
+        if (type_name == NULL) release_type_name (new_type_name);
 
         return -1;
     }
 
-    if (type_name == NULL) g_free (new_type_name);
+    if (type_name == NULL) release_type_name (new_type_name);
 
     /* store pointer to the class with the GType */
     Py_INCREF (class);
@@ -335,8 +367,9 @@ _wrap_pyg_enum_register (PyObject *self, PyObject *args)
         if (!pyg_enum_register (class, type_name)) return NULL;
     } else {
         char *new_type_name = get_type_name_for_class (class);
+        if (!new_type_name) return NULL;
         gboolean success = pyg_enum_register (class, new_type_name);
-        g_free (new_type_name);
+        release_type_name (new_type_name);
         if (!success) return NULL;
     }
 
@@ -362,8 +395,9 @@ _wrap_pyg_flags_register (PyObject *self, PyObject *args)
         if (!pyg_flags_register (class, type_name)) return NULL;
     } else {
         char *new_type_name = get_type_name_for_class (class);
+        if (!new_type_name) return NULL;
         gboolean success = pyg_flags_register (class, new_type_name);
-        g_free (new_type_name);
+        release_type_name (new_type_name);
         if (!success) return NULL;
     }
 
@@ -490,7 +524,7 @@ find_vfunc_info (GIBaseInfo *vfunc_info, GType implementor_gtype,
     ancestor_info = gi_base_info_get_container (vfunc_info);
     is_interface = GI_IS_INTERFACE_INFO (ancestor_info);
 
-    ancestor_g_type = gi_registered_type_info_get_g_type (
+    ancestor_g_type = pygi_registered_type_info_get_g_type (
         (GIRegisteredTypeInfo *)ancestor_info);
     implementor_class = g_type_class_ref (implementor_gtype);
     if (is_interface) {

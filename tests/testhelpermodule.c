@@ -17,10 +17,11 @@ static PyObject *_wrap_TestInterface__do_iface_method (PyObject *cls,
 static GType
 test_type_get_type (void)
 {
-    static GType gtype = 0;
+    static gsize gtype_id = 0;
     GType parent_type;
 
-    if (gtype == 0) {
+    if (g_once_init_enter (&gtype_id)) {
+        GType gtype;
         GTypeInfo *type_info;
         GTypeQuery query;
 
@@ -36,9 +37,10 @@ test_type_get_type (void)
 
         gtype = g_type_register_static (parent_type, "TestType", type_info, 0);
         if (!gtype) g_error ("Could not register TestType");
+        g_once_init_leave (&gtype_id, gtype);
     }
 
-    return gtype;
+    return gtype_id;
 }
 
 #define TYPE_TEST (test_type_get_type ())

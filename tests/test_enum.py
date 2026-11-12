@@ -1,6 +1,8 @@
 import threading
 import unittest
 
+import pytest
+
 from gi.repository import GObject
 from .helper import capture_glib_warnings
 
@@ -82,6 +84,7 @@ class EnumTests(unittest.TestCase):
         )
 
     @unittest.skipUnless(Gtk, "Gtk not available")
+    @pytest.mark.thread_unsafe(reason="GTK widgets belong to the main thread")
     def test_enum_as_string(self):
         box = Gtk.Box(orientation="vertical")
 

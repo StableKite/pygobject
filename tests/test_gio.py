@@ -45,6 +45,7 @@ class TestGio(unittest.TestCase):
         value = menu.get_item_attribute_value(0, "action", GLib.VariantType.new("s"))
         self.assertEqual("app.test", value.unpack())
 
+    @pytest.mark.thread_unsafe(reason="GVolumeMonitor requires the main thread")
     def test_volume_monitor_warning(self):
         with warnings.catch_warnings(record=True) as warn:
             warnings.simplefilter("always")
@@ -163,6 +164,7 @@ Exec={GLib.find_program_in_path("true")} action
     @unittest.skipIf(
         GioUnix is None or "DesktopAppInfo" not in dir(GioUnix), "Not supported"
     )
+    @pytest.mark.thread_unsafe(reason="launches processes on the shared session bus")
     def test_desktop_app_info_can_be_created_from_gio_unix(self):
         app_info = GioUnix.DesktopAppInfo.new_from_keyfile(self.key_file)
         self.assertIsNotNone(app_info)

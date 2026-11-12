@@ -8,15 +8,15 @@ typedef enum {
 static void
 test_interface_base_init (gpointer g_iface)
 {
-    static gboolean initialized = FALSE;
+    static gsize initialized = 0;
 
-    if (!initialized) {
+    if (g_once_init_enter (&initialized)) {
         g_object_interface_install_property (
             g_iface,
             g_param_spec_string ("some-property", "some-property",
                                  "A simple test property", NULL,
                                  G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-        initialized = TRUE;
+        g_once_init_leave (&initialized, 1);
     }
 }
 
@@ -24,9 +24,9 @@ test_interface_base_init (gpointer g_iface)
 GType
 test_interface_get_type (void)
 {
-    static GType gtype = 0;
+    static gsize gtype_id = 0;
 
-    if (!gtype) {
+    if (g_once_init_enter (&gtype_id)) {
         static const GTypeInfo info = {
             sizeof (TestInterfaceInterface), /* class_size */
             test_interface_base_init,        /* base_init */
@@ -39,13 +39,14 @@ test_interface_get_type (void)
             NULL
         };
 
-        gtype = g_type_register_static (G_TYPE_INTERFACE, "TestInterface",
-                                        &info, 0);
+        GType gtype = g_type_register_static (G_TYPE_INTERFACE,
+                                              "TestInterface", &info, 0);
 
         g_type_interface_add_prerequisite (gtype, G_TYPE_OBJECT);
+        g_once_init_leave (&gtype_id, gtype);
     }
 
-    return gtype;
+    return gtype_id;
 }
 
 static void

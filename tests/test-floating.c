@@ -66,6 +66,7 @@ struct _TestOwnedByLibrary {
 G_DEFINE_FINAL_TYPE (TestOwnedByLibrary, test_owned_by_library, G_TYPE_OBJECT);
 
 static GSList *obl_instance_list = NULL;
+static GMutex obl_instance_list_lock;
 
 static void
 test_owned_by_library_class_init (TestOwnedByLibraryClass *klass)
@@ -76,13 +77,17 @@ static void
 test_owned_by_library_init (TestOwnedByLibrary *self)
 {
     g_object_ref (self);
+    g_mutex_lock (&obl_instance_list_lock);
     obl_instance_list = g_slist_prepend (obl_instance_list, self);
+    g_mutex_unlock (&obl_instance_list_lock);
 }
 
 void
 test_owned_by_library_release (TestOwnedByLibrary *self)
 {
+    g_mutex_lock (&obl_instance_list_lock);
     obl_instance_list = g_slist_remove (obl_instance_list, self);
+    g_mutex_unlock (&obl_instance_list_lock);
     g_object_unref (self);
 }
 
@@ -107,6 +112,7 @@ G_DEFINE_FINAL_TYPE (TestFloatingAndSunk, test_floating_and_sunk,
                      G_TYPE_INITIALLY_UNOWNED);
 
 static GSList *fas_instance_list = NULL;
+static GMutex fas_instance_list_lock;
 
 static void
 test_floating_and_sunk_class_init (TestFloatingAndSunkClass *klass)
@@ -117,13 +123,17 @@ static void
 test_floating_and_sunk_init (TestFloatingAndSunk *self)
 {
     g_object_ref_sink (self);
+    g_mutex_lock (&fas_instance_list_lock);
     fas_instance_list = g_slist_prepend (fas_instance_list, self);
+    g_mutex_unlock (&fas_instance_list_lock);
 }
 
 void
 test_floating_and_sunk_release (TestFloatingAndSunk *self)
 {
+    g_mutex_lock (&fas_instance_list_lock);
     fas_instance_list = g_slist_remove (fas_instance_list, self);
+    g_mutex_unlock (&fas_instance_list_lock);
     g_object_unref (self);
 }
 

@@ -31,7 +31,7 @@ _pygi_lookup_signal_from_g_type (GType g_type, const gchar *signal_name)
     GISignalInfo *signal_info = NULL;
 
     repository = pygi_repository_get_default ();
-    info = gi_repository_find_by_gtype (repository, g_type);
+    info = pygi_repository_find_by_gtype (repository, g_type);
     if (info == NULL) return NULL;
 
     if (GI_IS_OBJECT_INFO (info))
@@ -169,7 +169,7 @@ pygi_signal_closure_marshal (GClosure *closure, GValue *return_value,
                 GIBaseInfo *info = gi_type_info_get_interface (type_info);
 
                 if (GI_IS_STRUCT_INFO (info) || GI_IS_UNION_INFO (info)) {
-                    GType gtype = gi_registered_type_info_get_g_type (
+                    GType gtype = pygi_registered_type_info_get_g_type (
                         (GIRegisteredTypeInfo *)info);
                     gboolean is_foreign =
                         (GI_IS_STRUCT_INFO (info))

@@ -773,10 +773,12 @@ _function_cache_init (PyGIFunctionCache *function_cache,
                 GIRepository *repository;
 
                 repository = pygi_repository_get_default ();
+                pygi_repository_lock ();
                 async_finish = gi_repository_find_by_name (
                     repository,
                     gi_base_info_get_namespace (callable_cache->info),
                     finish_name);
+                pygi_repository_unlock ();
             } else {
                 g_debug (
                     "Awaitable async functions only work on GObjects and as "

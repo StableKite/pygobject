@@ -88,7 +88,7 @@ _pygi_lookup_property_from_g_type (GType g_type, const gchar *attr_name)
     GIBaseInfo *info;
 
     repository = pygi_repository_get_default ();
-    info = gi_repository_find_by_gtype (repository, g_type);
+    info = pygi_repository_find_by_gtype (repository, g_type);
     if (info == NULL) return NULL;
 
     if (GI_IS_OBJECT_INFO (info))
@@ -248,7 +248,7 @@ pygi_set_gvalue_from_property_info (GValue *value,
             break;
         case PYGI_INTERFACE_TYPE_TAG_STRUCT:
         case PYGI_INTERFACE_TYPE_TAG_UNION: {
-            GType type = gi_registered_type_info_get_g_type (
+            GType type = pygi_registered_type_info_get_g_type (
                 GI_REGISTERED_TYPE_INFO (interface));
 
             if (g_type_is_a (type, G_TYPE_BOXED)) {

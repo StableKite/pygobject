@@ -884,7 +884,7 @@ class TestCallbacks(unittest.TestCase):
     @pytest.mark.thread_unsafe  # uses refcount
     def test_callback_scope_async(self):
         called = False
-        ud = "Test Value 44"
+        ud = "".join(("Test Value", " 44"))
 
         def callback(user_data):
             nonlocal called
@@ -1109,7 +1109,7 @@ class TestCallbacks(unittest.TestCase):
     @pytest.mark.thread_unsafe
     def test_callback_scope_notified_with_destroy(self):
         called = 0
-        ud = "Test scope notified data 33"
+        ud = "".join(("Test scope notified", " data 33"))
 
         def callback(user_data):
             nonlocal called

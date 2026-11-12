@@ -1,0 +1,1176 @@
+Description: Synchronize free-threaded metadata and native test fixtures
+Author: Robolightning <irobolightning@gmail.com>
+Origin: https://github.com/StableKite/pygobject/tree/codex/free-threading-parallel-fixes
+Forwarded: not-needed, upstream submission follows native validation
+Last-Update: 2026-11-12
+
+diff --git a/gi/gimodule.c b/gi/gimodule.c
+index 0246fea4..ace8d41a 100644
+--- a/gi/gimodule.c
++++ b/gi/gimodule.c
+@@ -138,46 +138,74 @@ pyg_run_class_init (GType gtype, gpointer gclass, PyTypeObject *pyclass)
+     return 0;
+ }
+ 
++static GMutex type_name_lock;
++static GHashTable *pending_type_names;
++
+ static char *
+ get_type_name_for_class (PyTypeObject *class)
+ {
+     gint i, name_serial;
+-    char name_serial_str[16];
+     PyObject *module;
++    char *base_name;
+     char *type_name = NULL;
+ 
+-    /* make name for new GType */
+-    name_serial = 1;
+-    /* give up after 1000 tries, just in case.. */
+-    while (name_serial < 1000) {
+-        g_free (type_name);
+-        g_snprintf (name_serial_str, 16, "-v%i", name_serial);
+-        module = PyObject_GetAttrString ((PyObject *)class, "__module__");
+-        if (module && PyUnicode_Check (module)) {
+-            type_name =
+-                g_strconcat (PyUnicode_AsUTF8 (module), ".", class->tp_name,
+-                             name_serial > 1 ? name_serial_str : NULL, NULL);
++    /* Resolve Python attributes before locking: this may execute Python. */
++    module = PyObject_GetAttrString ((PyObject *)class, "__module__");
++    if (module && PyUnicode_Check (module)) {
++        const char *module_name = PyUnicode_AsUTF8 (module);
++        if (!module_name) {
+             Py_DECREF (module);
+-        } else {
+-            if (module)
+-                Py_DECREF (module);
+-            else
+-                PyErr_Clear ();
+-            type_name = g_strconcat (class->tp_name,
+-                                     name_serial > 1 ? name_serial_str : NULL,
+-                                     NULL);
++            return NULL;
+         }
+-        /* convert '.' in type name to '+', which isn't banned (grumble) */
+-        for (i = 0; type_name[i] != '\0'; i++)
+-            if (type_name[i] == '.') type_name[i] = '+';
+-        if (g_type_from_name (type_name) == 0)
+-            break; /* we now have a unique name */
+-        ++name_serial;
++        base_name = g_strconcat (module_name, ".", class->tp_name, NULL);
++    } else {
++        if (!module) PyErr_Clear ();
++        base_name = g_strdup (class->tp_name);
+     }
+-
++    Py_XDECREF (module);
++    for (i = 0; base_name[i] != '\0'; i++)
++        if (base_name[i] == '.') base_name[i] = '+';
++
++    /* Reserve the name until registration finishes. Checking only the GType
++     * registry lets another thread choose the same not-yet-registered name.
++     * No Python API or type initialization runs while this lock is held. */
++    Py_BEGIN_ALLOW_THREADS;
++    g_mutex_lock (&type_name_lock);
++    if (!pending_type_names)
++        pending_type_names = g_hash_table_new (g_str_hash, g_str_equal);
++    for (name_serial = 1; name_serial < 1000; name_serial++) {
++        g_free (type_name);
++        type_name = name_serial == 1
++                        ? g_strdup (base_name)
++                        : g_strdup_printf ("%s-v%i", base_name, name_serial);
++        if (!g_type_from_name (type_name)
++            && !g_hash_table_contains (pending_type_names, type_name))
++            break;
++    }
++    if (name_serial == 1000)
++        g_clear_pointer (&type_name, g_free);
++    else
++        g_hash_table_add (pending_type_names, type_name);
++    g_mutex_unlock (&type_name_lock);
++    Py_END_ALLOW_THREADS;
++    g_free (base_name);
++    if (!type_name)
++        PyErr_SetString (PyExc_RuntimeError,
++                         "could not find an unused GType name");
+     return type_name;
+ }
+ 
++static void
++release_type_name (char *type_name)
++{
++    Py_BEGIN_ALLOW_THREADS;
++    g_mutex_lock (&type_name_lock);
++    g_hash_table_remove (pending_type_names, type_name);
++    g_mutex_unlock (&type_name_lock);
++    Py_END_ALLOW_THREADS;
++    g_free (type_name);
++}
++
+ static int
+ pyg_type_register (PyTypeObject *class, const char *type_name)
+ {
+@@ -218,6 +246,10 @@ pyg_type_register (PyTypeObject *class, const char *type_name)
+         new_type_name = (gchar *)type_name;
+     else
+         new_type_name = get_type_name_for_class (class);
++    if (!new_type_name) {
++        g_free (parent_interfaces);
++        return -1;
++    }
+ 
+     /* set class_data that will be passed to the class_init function. */
+     type_info.class_data = class;
+@@ -235,12 +267,12 @@ pyg_type_register (PyTypeObject *class, const char *type_name)
+                       "could not create new GType: %s (subclass of %s)",
+                       new_type_name, g_type_name (parent_type));
+ 
+-        if (type_name == NULL) g_free (new_type_name);
++        if (type_name == NULL) release_type_name (new_type_name);
+ 
+         return -1;
+     }
+ 
+-    if (type_name == NULL) g_free (new_type_name);
++    if (type_name == NULL) release_type_name (new_type_name);
+ 
+     /* store pointer to the class with the GType */
+     Py_INCREF (class);
+@@ -335,8 +367,9 @@ _wrap_pyg_enum_register (PyObject *self, PyObject *args)
+         if (!pyg_enum_register (class, type_name)) return NULL;
+     } else {
+         char *new_type_name = get_type_name_for_class (class);
++        if (!new_type_name) return NULL;
+         gboolean success = pyg_enum_register (class, new_type_name);
+-        g_free (new_type_name);
++        release_type_name (new_type_name);
+         if (!success) return NULL;
+     }
+ 
+@@ -362,8 +395,9 @@ _wrap_pyg_flags_register (PyObject *self, PyObject *args)
+         if (!pyg_flags_register (class, type_name)) return NULL;
+     } else {
+         char *new_type_name = get_type_name_for_class (class);
++        if (!new_type_name) return NULL;
+         gboolean success = pyg_flags_register (class, new_type_name);
+-        g_free (new_type_name);
++        release_type_name (new_type_name);
+         if (!success) return NULL;
+     }
+ 
+@@ -490,7 +524,7 @@ find_vfunc_info (GIBaseInfo *vfunc_info, GType implementor_gtype,
+     ancestor_info = gi_base_info_get_container (vfunc_info);
+     is_interface = GI_IS_INTERFACE_INFO (ancestor_info);
+ 
+-    ancestor_g_type = gi_registered_type_info_get_g_type (
++    ancestor_g_type = pygi_registered_type_info_get_g_type (
+         (GIRegisteredTypeInfo *)ancestor_info);
+     implementor_class = g_type_class_ref (implementor_gtype);
+     if (is_interface) {
+diff --git a/gi/module.py b/gi/module.py
+index 9663cf81..e2161271 100644
+--- a/gi/module.py
++++ b/gi/module.py
+@@ -123,9 +123,10 @@ class IntrospectionModule(ModuleType):
+             raise AttributeError(f"{self.__name__!r} object has no attribute {name!r}")
+ 
+         if isinstance(info, EnumInfo):
+-            g_type = info.get_g_type()
+-
+             with self._lock:
++                # Resolving the GType may run its C registration function.
++                # Serialize that first use along with creation of the wrapper.
++                g_type = info.get_g_type()
+                 wrapper = g_type.pytype
+ 
+                 if wrapper is None:
+@@ -142,7 +143,8 @@ class IntrospectionModule(ModuleType):
+                     g_type.pytype = wrapper
+ 
+         elif isinstance(info, RegisteredTypeInfo):
+-            g_type = info.get_g_type()
++            with self._lock:
++                g_type = info.get_g_type()
+ 
+             # Create a wrapper.
+             if isinstance(info, ObjectInfo):
+diff --git a/gi/pygenum.c b/gi/pygenum.c
+index a9396189..2fa921aa 100644
+--- a/gi/pygenum.c
++++ b/gi/pygenum.c
+@@ -19,6 +19,7 @@
+  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#include "pygi-repository.h"
+ #include "pygenum.h"
+ #include "pygi-basictype.h"
+ #include "pygi-type.h"
+@@ -116,7 +117,7 @@ pyg_enum_add_full (PyObject *module, const char *typename, GType gtype,
+         return NULL;
+     }
+     if (info != NULL) {
+-        GType info_gtype = gi_registered_type_info_get_g_type (
++        GType info_gtype = pygi_registered_type_info_get_g_type (
+             GI_REGISTERED_TYPE_INFO (info));
+ 
+         if (info_gtype != gtype) {
+diff --git a/gi/pygflags.c b/gi/pygflags.c
+index 0827e3c1..f1b01171 100644
+--- a/gi/pygflags.c
++++ b/gi/pygflags.c
+@@ -19,6 +19,7 @@
+  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#include "pygi-repository.h"
+ #include "pygflags.h"
+ 
+ #include "pygi-type.h"
+@@ -116,7 +117,7 @@ pyg_flags_add_full (PyObject *module, const char *typename, GType gtype,
+         return NULL;
+     }
+     if (info != NULL) {
+-        GType info_gtype = gi_registered_type_info_get_g_type (
++        GType info_gtype = pygi_registered_type_info_get_g_type (
+             GI_REGISTERED_TYPE_INFO (info));
+ 
+         if (info_gtype != gtype) {
+diff --git a/gi/pygi-cache-enum.c b/gi/pygi-cache-enum.c
+index e36c7fc8..797e9dbc 100644
+--- a/gi/pygi-cache-enum.c
++++ b/gi/pygi-cache-enum.c
+@@ -18,6 +18,7 @@
+  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#include "pygi-repository.h"
+ #include "pygenum.h"
+ #include "pygflags.h"
+ #include "pygi-cache-private.h"
+@@ -146,7 +147,7 @@ _pygi_marshal_from_py_interface_enum (PyGIInvokeState *state,
+     PyGIInterfaceCache *iface_cache = (PyGIInterfaceCache *)arg_cache;
+     GIBaseInfo *interface = NULL;
+     GType enum_type =
+-        gi_registered_type_info_get_g_type (iface_cache->interface_info);
++        pygi_registered_type_info_get_g_type (iface_cache->interface_info);
+ 
+     if (pyg_enum_get_value (enum_type, py_arg, &c_int) != 0) {
+         return FALSE;
+@@ -207,7 +208,7 @@ _pygi_marshal_from_py_interface_flags (PyGIInvokeState *state,
+     PyGIInterfaceCache *iface_cache = (PyGIInterfaceCache *)arg_cache;
+     GIBaseInfo *interface;
+     GType flags_type =
+-        gi_registered_type_info_get_g_type (iface_cache->interface_info);
++        pygi_registered_type_info_get_g_type (iface_cache->interface_info);
+ 
+     if (pyg_flags_get_value (flags_type, py_arg, &c_uint) != 0) {
+         return FALSE;
+diff --git a/gi/pygi-cache-interface.c b/gi/pygi-cache-interface.c
+index 7a28c9a2..e7a0eea7 100644
+--- a/gi/pygi-cache-interface.c
++++ b/gi/pygi-cache-interface.c
+@@ -18,6 +18,7 @@
+  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#include "pygi-repository.h"
+ #include "pygi-cache-private.h"
+ #include "pygi-info.h"
+ #include "pygi-type.h"
+@@ -65,7 +66,7 @@ pygi_arg_interface_setup (
+     iface_cache->interface_info = iface_info;
+     iface_cache->arg_cache.type_tag = GI_TYPE_TAG_INTERFACE;
+     iface_cache->type_name = _pygi_gi_base_info_get_fullname (base_info);
+-    iface_cache->g_type = gi_registered_type_info_get_g_type (iface_info);
++    iface_cache->g_type = pygi_registered_type_info_get_g_type (iface_info);
+     iface_cache->py_type = pygi_type_import_by_gi_info (base_info);
+ 
+     if (g_type_is_a (iface_cache->g_type, G_TYPE_OBJECT)) {
+diff --git a/gi/pygi-cache.c b/gi/pygi-cache.c
+index e0ea7c7b..738bdf06 100644
+--- a/gi/pygi-cache.c
++++ b/gi/pygi-cache.c
+@@ -773,10 +773,12 @@ _function_cache_init (PyGIFunctionCache *function_cache,
+                 GIRepository *repository;
+ 
+                 repository = pygi_repository_get_default ();
++                pygi_repository_lock ();
+                 async_finish = gi_repository_find_by_name (
+                     repository,
+                     gi_base_info_get_namespace (callable_cache->info),
+                     finish_name);
++                pygi_repository_unlock ();
+             } else {
+                 g_debug (
+                     "Awaitable async functions only work on GObjects and as "
+diff --git a/gi/pygi-fundamental.c b/gi/pygi-fundamental.c
+index 2c810c01..14b30fb1 100644
+--- a/gi/pygi-fundamental.c
++++ b/gi/pygi-fundamental.c
+@@ -256,7 +256,7 @@ pygi_fundamental_from_value (const GValue *value)
+     GIRepository *repository =
+         pygi_repository_get_default ();  // Access to system wide (default) repo instead
+     GIBaseInfo *info =
+-        gi_repository_find_by_gtype (repository, G_VALUE_TYPE (value));
++        pygi_repository_find_by_gtype (repository, G_VALUE_TYPE (value));
+     GTypeInstance *instance = NULL;
+ 
+     if (info == NULL) return NULL;
+@@ -285,8 +285,8 @@ pygi_fundamental_set_value (GValue *value, GTypeInstance *instance)
+     if (instance == NULL) return result;
+ 
+     repository = pygi_repository_get_default ();
+-    info = gi_repository_find_by_gtype (repository,
+-                                        G_TYPE_FROM_INSTANCE (instance));
++    info = pygi_repository_find_by_gtype (repository,
++                                          G_TYPE_FROM_INSTANCE (instance));
+ 
+     if (info == NULL) return result;
+ 
+diff --git a/gi/pygi-info.c b/gi/pygi-info.c
+index bd462418..ef88c5df 100644
+--- a/gi/pygi-info.c
++++ b/gi/pygi-info.c
+@@ -20,6 +20,7 @@
+  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#include "pygi-repository.h"
+ #include "pygi-argument.h"
+ #include "pygi-basictype.h"
+ #include "pygi-fundamental.h"
+@@ -1330,7 +1331,7 @@ _wrap_gi_registered_type_info_get_g_type (PyGIBaseInfo *self)
+ {
+     GType type;
+ 
+-    type = gi_registered_type_info_get_g_type (
++    type = pygi_registered_type_info_get_g_type (
+         (GIRegisteredTypeInfo *)self->info);
+ 
+     return pyg_type_wrapper_new (type);
+@@ -1983,7 +1984,7 @@ _pygi_gi_registered_type_info_check_object (GIRegisteredTypeInfo *info,
+         return 1;
+     }
+ 
+-    g_type = gi_registered_type_info_get_g_type (info);
++    g_type = pygi_registered_type_info_get_g_type (info);
+     if (g_type != G_TYPE_NONE) {
+         py_type = pygi_type_get_from_g_type (g_type);
+     } else {
+diff --git a/gi/pygi-property.c b/gi/pygi-property.c
+index 960ceed6..cd33bd0f 100644
+--- a/gi/pygi-property.c
++++ b/gi/pygi-property.c
+@@ -88,7 +88,7 @@ _pygi_lookup_property_from_g_type (GType g_type, const gchar *attr_name)
+     GIBaseInfo *info;
+ 
+     repository = pygi_repository_get_default ();
+-    info = gi_repository_find_by_gtype (repository, g_type);
++    info = pygi_repository_find_by_gtype (repository, g_type);
+     if (info == NULL) return NULL;
+ 
+     if (GI_IS_OBJECT_INFO (info))
+@@ -248,7 +248,7 @@ pygi_set_gvalue_from_property_info (GValue *value,
+             break;
+         case PYGI_INTERFACE_TYPE_TAG_STRUCT:
+         case PYGI_INTERFACE_TYPE_TAG_UNION: {
+-            GType type = gi_registered_type_info_get_g_type (
++            GType type = pygi_registered_type_info_get_g_type (
+                 GI_REGISTERED_TYPE_INFO (interface));
+ 
+             if (g_type_is_a (type, G_TYPE_BOXED)) {
+diff --git a/gi/pygi-repository.c b/gi/pygi-repository.c
+index 4781ac3b..92cddba9 100644
+--- a/gi/pygi-repository.c
++++ b/gi/pygi-repository.c
+@@ -29,6 +29,42 @@ PyObject *PyGIRepositoryError;
+ 
+ PYGI_DEFINE_TYPE ("gi.Repository", PyGIRepository_Type, PyGIRepository);
+ 
++static GRecMutex repository_lock;
++
++void
++pygi_repository_lock (void)
++{
++    Py_BEGIN_ALLOW_THREADS;
++    g_rec_mutex_lock (&repository_lock);
++    Py_END_ALLOW_THREADS;
++}
++
++void
++pygi_repository_unlock (void)
++{
++    g_rec_mutex_unlock (&repository_lock);
++}
++
++GType
++pygi_registered_type_info_get_g_type (GIRegisteredTypeInfo *info)
++{
++    GType type;
++    pygi_repository_lock ();
++    type = gi_registered_type_info_get_g_type (info);
++    pygi_repository_unlock ();
++    return type;
++}
++
++GIBaseInfo *
++pygi_repository_find_by_gtype (GIRepository *repository, GType gtype)
++{
++    GIBaseInfo *info;
++    pygi_repository_lock ();
++    info = gi_repository_find_by_gtype (repository, gtype);
++    pygi_repository_unlock ();
++    return info;
++}
++
+ 
+ static gpointer
+ init_once_default_repository (gpointer user_data)
+@@ -45,7 +81,9 @@ pygi_repository_get_default (void)
+ {
+     static GOnce once_default_repository = G_ONCE_INIT;
+ 
++    Py_BEGIN_ALLOW_THREADS;
+     g_once (&once_default_repository, init_once_default_repository, NULL);
++    Py_END_ALLOW_THREADS;
+ 
+     return once_default_repository.retval;
+ }
+@@ -90,7 +128,9 @@ _wrap_gi_repository_prepend_library_path (PyGIRepository *self, PyObject *args,
+         return NULL;
+     }
+ 
++    pygi_repository_lock ();
+     gi_repository_prepend_library_path (self->repository, directory);
++    pygi_repository_unlock ();
+ 
+     Py_RETURN_NONE;
+ }
+@@ -108,7 +148,9 @@ _wrap_gi_repository_prepend_search_path (PyGIRepository *self, PyObject *args,
+         return NULL;
+     }
+ 
++    pygi_repository_lock ();
+     gi_repository_prepend_search_path (self->repository, directory);
++    pygi_repository_unlock ();
+ 
+     Py_RETURN_NONE;
+ }
+@@ -129,8 +171,10 @@ _wrap_gi_repository_enumerate_versions (PyGIRepository *self, PyObject *args,
+         return NULL;
+     }
+ 
++    pygi_repository_lock ();
+     versions =
+         gi_repository_enumerate_versions (self->repository, namespace_, NULL);
++    pygi_repository_unlock ();
+     ret = PyList_New (0);
+     for (size_t i = 0; versions[i] != NULL; i++) {
+         char *version = g_steal_pointer (&versions[i]);
+@@ -165,8 +209,10 @@ _wrap_gi_repository_require (PyGIRepository *self, PyObject *args,
+         flags |= GI_REPOSITORY_LOAD_FLAG_LAZY;
+     }
+ 
++    pygi_repository_lock ();
+     gi_repository_require (self->repository, namespace_, version, flags,
+                            &error);
++    pygi_repository_unlock ();
+     if (error != NULL) {
+         PyErr_SetString (PyGIRepositoryError, error->message);
+         g_error_free (error);
+@@ -190,8 +236,11 @@ _wrap_gi_repository_is_registered (PyGIRepository *self, PyObject *args,
+         return NULL;
+     }
+ 
+-    return pygi_gboolean_to_py (
+-        gi_repository_is_registered (self->repository, namespace_, version));
++    pygi_repository_lock ();
++    gboolean registered =
++        gi_repository_is_registered (self->repository, namespace_, version);
++    pygi_repository_unlock ();
++    return pygi_gboolean_to_py (registered);
+ }
+ 
+ static PyObject *
+@@ -230,7 +279,9 @@ _wrap_gi_repository_find_by_name (PyGIRepository *self, PyObject *args,
+         Py_DECREF (is_keyword);
+     }
+ 
++    pygi_repository_lock ();
+     info = gi_repository_find_by_name (self->repository, namespace_, name);
++    pygi_repository_unlock ();
+     g_free (trimmed_name);
+ 
+     if (info == NULL) {
+@@ -260,7 +311,9 @@ _wrap_gi_repository_get_infos (PyGIRepository *self, PyObject *args,
+         return NULL;
+     }
+ 
++    pygi_repository_lock ();
+     n_infos = gi_repository_get_n_infos (self->repository, namespace_);
++    pygi_repository_unlock ();
+     if (n_infos < 0) {
+         PyErr_Format (PyExc_RuntimeError, "Namespace '%s' not loaded",
+                       namespace_);
+@@ -273,7 +326,9 @@ _wrap_gi_repository_get_infos (PyGIRepository *self, PyObject *args,
+         GIBaseInfo *info;
+         PyObject *py_info;
+ 
++        pygi_repository_lock ();
+         info = gi_repository_get_info (self->repository, namespace_, i);
++        pygi_repository_unlock ();
+         g_assert (info != NULL);
+ 
+         py_info = _pygi_info_new (info);
+@@ -305,8 +360,10 @@ _wrap_gi_repository_get_typelib_path (PyGIRepository *self, PyObject *args,
+         return NULL;
+     }
+ 
++    pygi_repository_lock ();
+     typelib_path =
+         gi_repository_get_typelib_path (self->repository, namespace_);
++    pygi_repository_unlock ();
+     if (typelib_path == NULL) {
+         PyErr_Format (PyExc_RuntimeError, "Namespace '%s' not loaded",
+                       namespace_);
+@@ -329,7 +386,9 @@ _wrap_gi_repository_get_version (PyGIRepository *self, PyObject *args,
+         return NULL;
+     }
+ 
++    pygi_repository_lock ();
+     version = gi_repository_get_version (self->repository, namespace_);
++    pygi_repository_unlock ();
+     if (version == NULL) {
+         PyErr_Format (PyExc_RuntimeError, "Namespace '%s' not loaded",
+                       namespace_);
+@@ -346,7 +405,9 @@ _wrap_gi_repository_get_loaded_namespaces (PyGIRepository *self)
+     PyObject *py_namespaces;
+     gssize i;
+ 
++    pygi_repository_lock ();
+     namespaces = gi_repository_get_loaded_namespaces (self->repository, NULL);
++    pygi_repository_unlock ();
+ 
+     py_namespaces = PyList_New (0);
+     for (i = 0; namespaces[i] != NULL; i++) {
+@@ -379,8 +440,10 @@ _wrap_gi_repository_get_dependencies (PyGIRepository *self, PyObject *args,
+ 
+     py_namespaces = PyList_New (0);
+     /* Returns NULL in case of no dependencies */
++    pygi_repository_lock ();
+     namespaces =
+         gi_repository_get_dependencies (self->repository, namespace_, NULL);
++    pygi_repository_unlock ();
+     if (namespaces == NULL) {
+         return py_namespaces;
+     }
+@@ -415,8 +478,10 @@ _wrap_gi_repository_get_immediate_dependencies (PyGIRepository *self,
+     }
+ 
+     py_namespaces = PyList_New (0);
++    pygi_repository_lock ();
+     namespaces = gi_repository_get_immediate_dependencies (self->repository,
+                                                            namespace_, NULL);
++    pygi_repository_unlock ();
+ 
+     for (i = 0; namespaces[i] != NULL; i++) {
+         PyObject *py_namespace = pygi_utf8_to_py (namespaces[i]);
+diff --git a/gi/pygi-repository.h b/gi/pygi-repository.h
+index 736cc388..5c8329ff 100644
+--- a/gi/pygi-repository.h
++++ b/gi/pygi-repository.h
+@@ -36,6 +36,11 @@ extern PyTypeObject PyGIRepository_Type;
+ extern PyObject *PyGIRepositoryError;
+ 
+ GIRepository *pygi_repository_get_default (void);
++void pygi_repository_lock (void);
++void pygi_repository_unlock (void);
++GType pygi_registered_type_info_get_g_type (GIRegisteredTypeInfo *info);
++GIBaseInfo *pygi_repository_find_by_gtype (GIRepository *repository,
++                                           GType gtype);
+ 
+ int pygi_repository_register_types (PyObject *m);
+ 
+diff --git a/gi/pygi-signal-closure.c b/gi/pygi-signal-closure.c
+index 5759ae33..b534e8a7 100644
+--- a/gi/pygi-signal-closure.c
++++ b/gi/pygi-signal-closure.c
+@@ -31,7 +31,7 @@ _pygi_lookup_signal_from_g_type (GType g_type, const gchar *signal_name)
+     GISignalInfo *signal_info = NULL;
+ 
+     repository = pygi_repository_get_default ();
+-    info = gi_repository_find_by_gtype (repository, g_type);
++    info = pygi_repository_find_by_gtype (repository, g_type);
+     if (info == NULL) return NULL;
+ 
+     if (GI_IS_OBJECT_INFO (info))
+@@ -169,7 +169,7 @@ pygi_signal_closure_marshal (GClosure *closure, GValue *return_value,
+                 GIBaseInfo *info = gi_type_info_get_interface (type_info);
+ 
+                 if (GI_IS_STRUCT_INFO (info) || GI_IS_UNION_INFO (info)) {
+-                    GType gtype = gi_registered_type_info_get_g_type (
++                    GType gtype = pygi_registered_type_info_get_g_type (
+                         (GIRegisteredTypeInfo *)info);
+                     gboolean is_foreign =
+                         (GI_IS_STRUCT_INFO (info))
+diff --git a/gi/pygi-type.c b/gi/pygi-type.c
+index 79ecf648..b22faec2 100644
+--- a/gi/pygi-type.c
++++ b/gi/pygi-type.c
+@@ -62,7 +62,7 @@ pygi_type_import_by_g_type (GType g_type)
+ 
+     repository = pygi_repository_get_default ();
+ 
+-    info = gi_repository_find_by_gtype (repository, g_type);
++    info = pygi_repository_find_by_gtype (repository, g_type);
+     if (info == NULL) {
+         return NULL;
+     }
+diff --git a/gi/pygi-value.c b/gi/pygi-value.c
+index 9c8595b9..9b205d73 100644
+--- a/gi/pygi-value.c
++++ b/gi/pygi-value.c
+@@ -593,7 +593,7 @@ pyg_value_from_pyobject_with_error (GValue *value, PyObject *obj)
+             }
+ 
+             repository = pygi_repository_get_default ();
+-            info = gi_repository_find_by_gtype (repository, value_type);
++            info = pygi_repository_find_by_gtype (repository, value_type);
+ 
+             if (info && GI_IS_OBJECT_INFO (info)) {
+                 set_value_func =
+@@ -795,7 +795,7 @@ value_to_py_structured_type (const GValue *value, GType fundamental,
+             return bm->fromvalue (value);
+ 
+         repository = pygi_repository_get_default ();
+-        info = gi_repository_find_by_gtype (repository, fundamental);
++        info = pygi_repository_find_by_gtype (repository, fundamental);
+ 
+         if (info == NULL) break;
+ 
+diff --git a/tests/helper.py b/tests/helper.py
+index d6c0eb09..320e723c 100644
+--- a/tests/helper.py
++++ b/tests/helper.py
+@@ -4,6 +4,7 @@ import inspect
+ import warnings
+ import functools
+ import sys
++import threading
+ from collections import namedtuple
+ from io import StringIO
+ 
+@@ -12,6 +13,9 @@ from gi import PyGIDeprecationWarning
+ from gi.repository import GLib
+ 
+ 
++_glib_log_lock = threading.RLock()
++
++
+ ExceptionInfo = namedtuple("ExceptionInfo", ["type", "value", "traceback"])
+ """The type used for storing exceptions used by capture_exceptions()"""
+ 
+@@ -72,23 +76,27 @@ def capture_glib_warnings(allow_warnings=False, allow_criticals=False):
+     by default. Setting allow_warnings and allow_criticals will temporarily
+     allow warnings or criticals without terminating the test run.
+     """
+-    old_mask = GLib.log_set_always_fatal(GLib.LogLevelFlags(0))
+-
+-    new_mask = old_mask
+-    if allow_warnings:
+-        new_mask &= ~GLib.LogLevelFlags.LEVEL_WARNING
+-    if allow_criticals:
+-        new_mask &= ~GLib.LogLevelFlags.LEVEL_CRITICAL
+-
+-    GLib.log_set_always_fatal(GLib.LogLevelFlags(new_mask))
+-
+-    GLibWarning = gi._gi.Warning
+-    try:
+-        with warnings.catch_warnings(record=True) as warn:
+-            warnings.filterwarnings("always", category=GLibWarning)
+-            yield warn
+-    finally:
+-        GLib.log_set_always_fatal(old_mask)
++    # The fatal mask is process-wide. Hold the lock through the captured code
++    # so another thread cannot restore fatal errors while it is still running.
++    # A recursive lock also preserves nested captures in the same thread.
++    with _glib_log_lock:
++        old_mask = GLib.log_set_always_fatal(GLib.LogLevelFlags(0))
++
++        new_mask = old_mask
++        if allow_warnings:
++            new_mask &= ~GLib.LogLevelFlags.LEVEL_WARNING
++        if allow_criticals:
++            new_mask &= ~GLib.LogLevelFlags.LEVEL_CRITICAL
++
++        GLib.log_set_always_fatal(GLib.LogLevelFlags(new_mask))
++
++        GLibWarning = gi._gi.Warning
++        try:
++            with warnings.catch_warnings(record=True) as warn:
++                warnings.filterwarnings("always", category=GLibWarning)
++                yield warn
++        finally:
++            GLib.log_set_always_fatal(old_mask)
+ 
+ 
+ @contextlib.contextmanager
+diff --git a/tests/test-floating.c b/tests/test-floating.c
+index 8fb03e96..65cbb309 100644
+--- a/tests/test-floating.c
++++ b/tests/test-floating.c
+@@ -66,6 +66,7 @@ struct _TestOwnedByLibrary {
+ G_DEFINE_FINAL_TYPE (TestOwnedByLibrary, test_owned_by_library, G_TYPE_OBJECT);
+ 
+ static GSList *obl_instance_list = NULL;
++static GMutex obl_instance_list_lock;
+ 
+ static void
+ test_owned_by_library_class_init (TestOwnedByLibraryClass *klass)
+@@ -76,13 +77,17 @@ static void
+ test_owned_by_library_init (TestOwnedByLibrary *self)
+ {
+     g_object_ref (self);
++    g_mutex_lock (&obl_instance_list_lock);
+     obl_instance_list = g_slist_prepend (obl_instance_list, self);
++    g_mutex_unlock (&obl_instance_list_lock);
+ }
+ 
+ void
+ test_owned_by_library_release (TestOwnedByLibrary *self)
+ {
++    g_mutex_lock (&obl_instance_list_lock);
+     obl_instance_list = g_slist_remove (obl_instance_list, self);
++    g_mutex_unlock (&obl_instance_list_lock);
+     g_object_unref (self);
+ }
+ 
+@@ -107,6 +112,7 @@ G_DEFINE_FINAL_TYPE (TestFloatingAndSunk, test_floating_and_sunk,
+                      G_TYPE_INITIALLY_UNOWNED);
+ 
+ static GSList *fas_instance_list = NULL;
++static GMutex fas_instance_list_lock;
+ 
+ static void
+ test_floating_and_sunk_class_init (TestFloatingAndSunkClass *klass)
+@@ -117,13 +123,17 @@ static void
+ test_floating_and_sunk_init (TestFloatingAndSunk *self)
+ {
+     g_object_ref_sink (self);
++    g_mutex_lock (&fas_instance_list_lock);
+     fas_instance_list = g_slist_prepend (fas_instance_list, self);
++    g_mutex_unlock (&fas_instance_list_lock);
+ }
+ 
+ void
+ test_floating_and_sunk_release (TestFloatingAndSunk *self)
+ {
++    g_mutex_lock (&fas_instance_list_lock);
+     fas_instance_list = g_slist_remove (fas_instance_list, self);
++    g_mutex_unlock (&fas_instance_list_lock);
+     g_object_unref (self);
+ }
+ 
+diff --git a/tests/test-thread.c b/tests/test-thread.c
+index 399142e6..ec317ce7 100644
+--- a/tests/test-thread.c
++++ b/tests/test-thread.c
+@@ -14,14 +14,15 @@ typedef enum { TEST_THREAD_A, TEST_THREAD_B } ThreadEnumType;
+ static GType
+ test_thread_enum_get_type (void)
+ {
+-    static GType enum_type = 0;
++    static gsize enum_type = 0;
+     static GEnumValue enum_values[] = {
+         { TEST_THREAD_A, "TEST_THREAD_A", "a as in apple" },
+         { 0, NULL, NULL },
+     };
+ 
+-    if (!enum_type) {
+-        enum_type = g_enum_register_static ("TestThreadEnum", enum_values);
++    if (g_once_init_enter (&enum_type)) {
++        GType gtype = g_enum_register_static ("TestThreadEnum", enum_values);
++        g_once_init_leave (&enum_type, gtype);
+     }
+     return enum_type;
+ }
+diff --git a/tests/test-unknown.c b/tests/test-unknown.c
+index fe49d2c9..f81f2200 100644
+--- a/tests/test-unknown.c
++++ b/tests/test-unknown.c
+@@ -8,15 +8,15 @@ typedef enum {
+ static void
+ test_interface_base_init (gpointer g_iface)
+ {
+-    static gboolean initialized = FALSE;
++    static gsize initialized = 0;
+ 
+-    if (!initialized) {
++    if (g_once_init_enter (&initialized)) {
+         g_object_interface_install_property (
+             g_iface,
+             g_param_spec_string ("some-property", "some-property",
+                                  "A simple test property", NULL,
+                                  G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+-        initialized = TRUE;
++        g_once_init_leave (&initialized, 1);
+     }
+ }
+ 
+@@ -24,9 +24,9 @@ test_interface_base_init (gpointer g_iface)
+ GType
+ test_interface_get_type (void)
+ {
+-    static GType gtype = 0;
++    static gsize gtype_id = 0;
+ 
+-    if (!gtype) {
++    if (g_once_init_enter (&gtype_id)) {
+         static const GTypeInfo info = {
+             sizeof (TestInterfaceInterface), /* class_size */
+             test_interface_base_init,        /* base_init */
+@@ -39,13 +39,14 @@ test_interface_get_type (void)
+             NULL
+         };
+ 
+-        gtype = g_type_register_static (G_TYPE_INTERFACE, "TestInterface",
+-                                        &info, 0);
++        GType gtype = g_type_register_static (G_TYPE_INTERFACE,
++                                              "TestInterface", &info, 0);
+ 
+         g_type_interface_add_prerequisite (gtype, G_TYPE_OBJECT);
++        g_once_init_leave (&gtype_id, gtype);
+     }
+ 
+-    return gtype;
++    return gtype_id;
+ }
+ 
+ static void
+diff --git a/tests/test_atoms.py b/tests/test_atoms.py
+index 146f7240..e4a3c59b 100644
+--- a/tests/test_atoms.py
++++ b/tests/test_atoms.py
+@@ -72,6 +72,7 @@ class TestGdkAtom(unittest.TestCase):
+         self.assertTrue(Gtk.targets_include_image([a_jpeg, a_plain], False))
+ 
+     @unittest.skipUnless(is_X11(), "only on X11")
++    @pytest.mark.thread_unsafe(reason="GTK clipboard belongs to the main thread")
+     def test_out_array(self):
+         a_selection = Gdk.Atom.intern("my_clipboard", False)
+         clipboard = Gtk.Clipboard.get(a_selection)
+diff --git a/tests/test_enum.py b/tests/test_enum.py
+index 5eee30c6..2b9197d1 100644
+--- a/tests/test_enum.py
++++ b/tests/test_enum.py
+@@ -1,6 +1,8 @@
+ import threading
+ import unittest
+ 
++import pytest
++
+ from gi.repository import GObject
+ from .helper import capture_glib_warnings
+ 
+@@ -82,6 +84,7 @@ class EnumTests(unittest.TestCase):
+         )
+ 
+     @unittest.skipUnless(Gtk, "Gtk not available")
++    @pytest.mark.thread_unsafe(reason="GTK widgets belong to the main thread")
+     def test_enum_as_string(self):
+         box = Gtk.Box(orientation="vertical")
+ 
+diff --git a/tests/test_everything.py b/tests/test_everything.py
+index 09f2fb84..3165b503 100644
+--- a/tests/test_everything.py
++++ b/tests/test_everything.py
+@@ -355,6 +355,7 @@ class TestEverything(unittest.TestCase):
+         self.assertAlmostEqual(two, 5.0)
+         self.assertAlmostEqual(three, 7.5)
+ 
++    @pytest.mark.thread_unsafe(reason="C fixture overwrites one global GValue")
+     def test_value(self):
+         self.assertEqual(Everything.test_int_value_arg(GLib.MAXINT), GLib.MAXINT)
+         self.assertEqual(Everything.test_value_return(GLib.MAXINT), GLib.MAXINT)
+@@ -660,6 +661,7 @@ class TestEverything(unittest.TestCase):
+     def test_strv_in(self):
+         Everything.test_strv_in(["1", "2", "3"])
+ 
++    @pytest.mark.thread_unsafe(reason="C fixture lazily builds one shared GList")
+     def test_glist(self):
+         self.assertEqual(Everything.test_glist_nothing_return(), ["1", "2", "3"])
+         self.assertEqual(Everything.test_glist_nothing_return2(), ["1", "2", "3"])
+diff --git a/tests/test_gi.py b/tests/test_gi.py
+index 682b6b08..1b1c889b 100644
+--- a/tests/test_gi.py
++++ b/tests/test_gi.py
+@@ -1326,11 +1326,13 @@ class TestGArray(unittest.TestCase):
+     def test_garray_int_none_return(self):
+         self.assertEqual([-1, 0, 1, 2], GIMarshallingTests.garray_int_none_return())
+ 
++    @pytest.mark.thread_unsafe(reason="C fixture lazily fills one shared GArray")
+     def test_garray_uint64_none_return(self):
+         self.assertEqual(
+             [0, GLib.MAXUINT64], GIMarshallingTests.garray_uint64_none_return()
+         )
+ 
++    @pytest.mark.thread_unsafe(reason="C fixture lazily fills one shared GArray")
+     def test_garray_enum_none_return(self):
+         self.assertEqual(
+             [
+@@ -1590,6 +1592,7 @@ class TestGList(unittest.TestCase):
+     def test_glist_utf8_none_in(self):
+         GIMarshallingTests.glist_utf8_none_in(Sequence(("0", "1", "2")))
+ 
++    @pytest.mark.thread_unsafe(reason="C fixture lazily builds one shared GList")
+     def test_glist_utf8_none_out(self):
+         self.assertEqual(["0", "1", "2"], GIMarshallingTests.glist_utf8_none_out())
+ 
+@@ -1660,6 +1663,7 @@ class TestGSList(unittest.TestCase):
+     def test_gslist_utf8_none_in(self):
+         GIMarshallingTests.gslist_utf8_none_in(Sequence(("0", "1", "2")))
+ 
++    @pytest.mark.thread_unsafe(reason="C fixture lazily builds one shared GSList")
+     def test_gslist_utf8_none_out(self):
+         self.assertEqual(["0", "1", "2"], GIMarshallingTests.gslist_utf8_none_out())
+ 
+@@ -1830,6 +1834,7 @@ class TestGHashTable(unittest.TestCase):
+ 
+ 
+ class TestGValue(unittest.TestCase):
++    @pytest.mark.thread_unsafe(reason="C fixture initializes a shared GValue")
+     def test_gvalue_return(self):
+         self.assertEqual(42, GIMarshallingTests.gvalue_return())
+ 
+@@ -1873,9 +1878,11 @@ class TestGValue(unittest.TestCase):
+         with pytest.raises(TypeError):
+             v2.get_value()
+ 
++    @pytest.mark.thread_unsafe(reason="C fixture initializes a shared GValue")
+     def test_gvalue_out(self):
+         self.assertEqual(42, GIMarshallingTests.gvalue_out())
+ 
++    @pytest.mark.thread_unsafe(reason="C fixture initializes a shared GValue")
+     def test_gvalue_int64_out(self):
+         self.assertEqual(GLib.MAXINT64, GIMarshallingTests.gvalue_int64_out())
+ 
+diff --git a/tests/test_gio.py b/tests/test_gio.py
+index b92a0929..49359836 100644
+--- a/tests/test_gio.py
++++ b/tests/test_gio.py
+@@ -45,6 +45,7 @@ class TestGio(unittest.TestCase):
+         value = menu.get_item_attribute_value(0, "action", GLib.VariantType.new("s"))
+         self.assertEqual("app.test", value.unpack())
+ 
++    @pytest.mark.thread_unsafe(reason="GVolumeMonitor requires the main thread")
+     def test_volume_monitor_warning(self):
+         with warnings.catch_warnings(record=True) as warn:
+             warnings.simplefilter("always")
+@@ -163,6 +164,7 @@ Exec={GLib.find_program_in_path("true")} action
+     @unittest.skipIf(
+         GioUnix is None or "DesktopAppInfo" not in dir(GioUnix), "Not supported"
+     )
++    @pytest.mark.thread_unsafe(reason="launches processes on the shared session bus")
+     def test_desktop_app_info_can_be_created_from_gio_unix(self):
+         app_info = GioUnix.DesktopAppInfo.new_from_keyfile(self.key_file)
+         self.assertIsNotNone(app_info)
+diff --git a/tests/test_helper.py b/tests/test_helper.py
+new file mode 100644
+index 00000000..75954c48
+--- /dev/null
++++ b/tests/test_helper.py
+@@ -0,0 +1,39 @@
++from concurrent.futures import ThreadPoolExecutor
++import threading
++import time
++
++import pytest
++
++from gi.repository import GLib
++from .helper import capture_glib_warnings
++
++
++@pytest.mark.thread_unsafe(reason="runs its own threads and checks the global mask")
++def test_concurrent_glib_warning_capture():
++    """Nested captures must restore the fatal mask despite competing threads."""
++    original = GLib.log_set_always_fatal(GLib.LogLevelFlags(0))
++    GLib.log_set_always_fatal(original)
++    barrier = threading.Barrier(8)
++
++    def get_mask():
++        mask = GLib.log_set_always_fatal(GLib.LogLevelFlags(0))
++        GLib.log_set_always_fatal(mask)
++        return mask
++
++    def capture():
++        barrier.wait(timeout=10)
++        for _ in range(30):
++            with capture_glib_warnings(allow_criticals=True):
++                time.sleep(0)
++                mask = get_mask()
++                assert not mask & GLib.LogLevelFlags.LEVEL_CRITICAL
++                with capture_glib_warnings(allow_warnings=True):
++                    assert not get_mask() & GLib.LogLevelFlags.LEVEL_WARNING
++                assert get_mask() == mask
++
++    try:
++        with ThreadPoolExecutor(max_workers=8) as pool:
++            list(pool.map(lambda _: capture(), range(8)))
++        assert get_mask() == original
++    finally:
++        GLib.log_set_always_fatal(original)
+diff --git a/tests/test_object_lifecycle.py b/tests/test_object_lifecycle.py
+index 52656ee0..08da46d5 100644
+--- a/tests/test_object_lifecycle.py
++++ b/tests/test_object_lifecycle.py
+@@ -184,6 +184,7 @@ with warnings.catch_warnings():
+ 
+ def test_class_with_slots_raises_warning():
+     with warnings.catch_warnings(record=True) as warn:
++        warnings.simplefilter("always", PyGIWarning)
+ 
+         class _SlotClass(GObject.Object):
+             __slots__ = ["py_int"]
+@@ -197,6 +198,7 @@ def test_subclass_with_slots_raises_warning():
+         pass
+ 
+     with warnings.catch_warnings(record=True) as warn:
++        warnings.simplefilter("always", PyGIWarning)
+ 
+         class _SlotClass(BaseClass):
+             __slots__ = ["py_int"]
+diff --git a/tests/test_overrides_gtk.py b/tests/test_overrides_gtk.py
+index 1dd10b14..cc623419 100644
+--- a/tests/test_overrides_gtk.py
++++ b/tests/test_overrides_gtk.py
+@@ -6,6 +6,11 @@ import warnings
+ 
+ import pytest
+ 
++
++# GTK widgets and their models must stay on the thread that initialized GTK.
++# These tests still run in full when pytest-run-parallel is enabled.
++pytestmark = pytest.mark.thread_unsafe(reason="GTK requires its main thread")
++
+ from .helper import ignore_gi_deprecation_warnings, capture_glib_warnings
+ 
+ import gi.overrides
+diff --git a/tests/test_threading.py b/tests/test_threading.py
+new file mode 100644
+index 00000000..ea66a9b1
+--- /dev/null
++++ b/tests/test_threading.py
+@@ -0,0 +1,82 @@
++from concurrent.futures import ThreadPoolExecutor
++import threading
++
++import pytest
++import testhelper
++
++from gi.repository import GObject
++
++
++@pytest.mark.thread_unsafe(reason="starts its own synchronized worker threads")
++def test_concurrent_type_registration():
++    """Same-named Python classes must receive distinct registered GTypes."""
++    barrier = threading.Barrier(8)
++
++    def register(_):
++        classes = []
++        for _ in range(16):
++            barrier.wait(timeout=10)
++
++            class ConcurrentObject(GObject.Object):
++                pass
++
++            class ConcurrentEnum(GObject.GEnum):
++                FIRST = 1
++
++            class ConcurrentFlags(GObject.GFlags):
++                FIRST = 1
++
++            classes.extend((ConcurrentObject, ConcurrentEnum, ConcurrentFlags))
++        return classes
++
++    with ThreadPoolExecutor(max_workers=8) as pool:
++        classes = [cls for group in pool.map(register, range(8)) for cls in group]
++
++    assert len(classes) == 384
++    assert len({cls.__gtype__ for cls in classes}) == len(classes)
++    for cls in classes:
++        assert cls.__gtype__.pytype is cls
++        assert GObject.GType.from_name(cls.__gtype__.name) == cls.__gtype__
++
++
++@pytest.mark.thread_unsafe(reason="starts its own synchronized worker threads")
++def test_concurrent_property_construction():
++    """Metadata cache misses from independent objects must not corrupt the repo."""
++    classes = [
++        type(
++            f"ConcurrentProperty{i}",
++            (GObject.Object,),
++            {"text": GObject.Property(type=str, default="")},
++        )
++        for i in range(32)
++    ]
++    barrier = threading.Barrier(8)
++
++    def construct(index):
++        barrier.wait(timeout=10)
++        for i in range(128):
++            expected = f"{index}:{i}"
++            obj = classes[(i + index) % len(classes)](text=expected)
++            assert obj.props.text == expected
++
++    with ThreadPoolExecutor(max_workers=8) as pool:
++        list(pool.map(construct, range(8)))
++
++
++@pytest.mark.thread_unsafe(reason="starts its own threads and reads fixture lists")
++def test_concurrent_native_fixture_ownership():
++    """Concurrent C-side ownership changes must leave both fixture lists empty."""
++    barrier = threading.Barrier(8)
++
++    def own_and_release(_):
++        for _ in range(16):
++            barrier.wait(timeout=10)
++            objects = [testhelper.OwnedByLibrary(), testhelper.FloatingAndSunk()]
++            barrier.wait(timeout=10)
++            for obj in objects:
++                obj.release()
++
++    with ThreadPoolExecutor(max_workers=8) as pool:
++        list(pool.map(own_and_release, range(8)))
++    assert testhelper.owned_by_library_get_instance_list() == []
++    assert testhelper.floating_and_sunk_get_instance_list() == []
+diff --git a/tests/testhelpermodule.c b/tests/testhelpermodule.c
+index bb022a6f..242e1f14 100644
+--- a/tests/testhelpermodule.c
++++ b/tests/testhelpermodule.c
+@@ -17,10 +17,11 @@ static PyObject *_wrap_TestInterface__do_iface_method (PyObject *cls,
+ static GType
+ test_type_get_type (void)
+ {
+-    static GType gtype = 0;
++    static gsize gtype_id = 0;
+     GType parent_type;
+ 
+-    if (gtype == 0) {
++    if (g_once_init_enter (&gtype_id)) {
++        GType gtype;
+         GTypeInfo *type_info;
+         GTypeQuery query;
+ 
+@@ -36,9 +37,10 @@ test_type_get_type (void)
+ 
+         gtype = g_type_register_static (parent_type, "TestType", type_info, 0);
+         if (!gtype) g_error ("Could not register TestType");
++        g_once_init_leave (&gtype_id, gtype);
+     }
+ 
+-    return gtype;
++    return gtype_id;
+ }
+ 
+ #define TYPE_TEST (test_type_get_type ())

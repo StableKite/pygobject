@@ -1,0 +1,703 @@
+Description: Backport upstream free-threading support
+Author: Arjan Molenaar <amolenaar@gnome.org>
+Origin: https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/565
+Forwarded: https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/565
+Last-Update: 2026-11-12
+
+diff --git a/gi/gimodule.c b/gi/gimodule.c
+index 34b0c9f5..0246fea4 100644
+--- a/gi/gimodule.c
++++ b/gi/gimodule.c
+@@ -1114,6 +1114,9 @@ pygi_register_version_tuples (PyObject *d)
+ 
+ static PyModuleDef_Slot _gi_slots[] = {
+     { Py_mod_exec, _gi_exec },
++#ifdef Py_GIL_DISABLED
++    { Py_mod_gil, Py_MOD_GIL_NOT_USED },
++#endif
+     { 0, NULL },
+ };
+ 
+diff --git a/gi/pygi-async.c b/gi/pygi-async.c
+index cae513e4..4369fdee 100644
+--- a/gi/pygi-async.c
++++ b/gi/pygi-async.c
+@@ -33,7 +33,6 @@ static PyObject *asyncio_get_running_loop;
+ #if defined(PYPY_VERSION)
+ static PyObject *contextvars_copy_context;
+ #endif
+-static PyObject *cancellable_info;
+ 
+ /* This is never instantiated. */
+ PYGI_DEFINE_TYPE ("gi._gi.Async", PyGIAsync_Type, PyGIAsync)
+@@ -218,10 +217,25 @@ async_remove_done_callback (PyGIAsync *self, PyObject *fn)
+     return PyLong_FromSsize_t (removed);
+ }
+ 
++static gpointer
++init_once_cancellable_info (gpointer user_data)
++{
++    PyObject *cancellable_info;
++    PyObject *gio = PyImport_ImportModule ("gi.repository.Gio");
++    if (gio == NULL) return NULL;
++
++    cancellable_info = PyObject_GetAttrString (gio, "Cancellable");
++    Py_DECREF (gio);
++
++    return cancellable_info;
++}
++
+ static int
+ async_init (PyGIAsync *self, PyObject *args, PyObject *kwargs)
+ {
+     static char *kwlist[] = { "finish_func", "cancellable", NULL };
++    static GOnce once_cancellable_info = G_ONCE_INIT;
++    PyObject *cancellable_info;
+     PyObject *context = NULL;
+     GMainContext *ctx = NULL;
+     int ret = -1;
+@@ -234,20 +248,9 @@ async_init (PyGIAsync *self, PyObject *args, PyObject *kwargs)
+ 
+     Py_INCREF (self->finish_func);
+ 
+-    /* We need to pull in Gio.Cancellable at some point, but we delay it
+-     * until really needed to avoid having a dependency.
+-     */
+-    if (G_UNLIKELY (!cancellable_info)) {
+-        PyObject *gio;
+-
+-        gio = PyImport_ImportModule ("gi.repository.Gio");
+-        if (gio == NULL) goto out;
+-
+-        cancellable_info = PyObject_GetAttrString (gio, "Cancellable");
+-        Py_DECREF (gio);
+-
+-        if (!cancellable_info) goto out;
+-    }
++    g_once (&once_cancellable_info, init_once_cancellable_info, NULL);
++    cancellable_info = once_cancellable_info.retval;
++    if (!cancellable_info) goto out;
+ 
+     if (self->cancellable) {
+         int res;
+@@ -632,9 +635,6 @@ pygi_async_register_types (PyObject *module)
+     if (contextvars_copy_context == NULL) goto fail;
+ #endif
+ 
+-    /* Only initialized when really needed! */
+-    cancellable_info = NULL;
+-
+     Py_CLEAR (asyncio);
+     return 0;
+ 
+diff --git a/gi/pygi-capi.c b/gi/pygi-capi.c
+index 5bdfed21..8350c6eb 100644
+--- a/gi/pygi-capi.c
++++ b/gi/pygi-capi.c
+@@ -254,7 +254,7 @@ pyg_register_class_init (GType gtype, PyGClassInitFunc class_init)
+ 
+ static GHashTable *log_handlers = NULL;
+ static gboolean log_handlers_disabled = FALSE;
+-
++static GMutex log_handlers_lock;
+ 
+ static void
+ remove_handler (gpointer domain, gpointer handler, gpointer unused)
+@@ -283,6 +283,8 @@ add_warning_redirection (const char *domain, PyObject *warning)
+     g_return_if_fail (domain != NULL);
+     g_return_if_fail (warning != NULL);
+ 
++    g_mutex_lock (&log_handlers_lock);
++
+     if (!log_handlers_disabled) {
+         guint handler;
+         gpointer old_handler;
+@@ -300,17 +302,23 @@ add_warning_redirection (const char *domain, PyObject *warning)
+         g_hash_table_insert (log_handlers, g_strdup (domain),
+                              GUINT_TO_POINTER (handler));
+     }
++
++    g_mutex_unlock (&log_handlers_lock);
+ }
+ 
+ static void
+ disable_warning_redirections (void)
+ {
++    g_mutex_lock (&log_handlers_lock);
++
+     log_handlers_disabled = TRUE;
+ 
+     if (log_handlers) {
+         g_hash_table_foreach (log_handlers, remove_handler, NULL);
+         g_clear_pointer (&log_handlers, g_hash_table_destroy);
+     }
++
++    g_mutex_unlock (&log_handlers_lock);
+ }
+ 
+ /**
+diff --git a/gi/pygi-closure.c b/gi/pygi-closure.c
+index 98b0844a..06632485 100644
+--- a/gi/pygi-closure.c
++++ b/gi/pygi-closure.c
+@@ -30,6 +30,7 @@
+    library function call.
+  */
+ static GSList *async_free_list;
++static GMutex async_free_list_lock;
+ 
+ static void
+ _pygi_closure_assign_pyobj_to_retval (gpointer retval, GIArgument *arg,
+@@ -578,7 +579,9 @@ end:
+         /* Append this PyGICClosure to a list of closure that we will free
+                after we're done with this function invokation */
+         _pygi_invoke_closure_clear_py_data (closure);
++        g_mutex_lock (&async_free_list_lock);
+         async_free_list = g_slist_prepend (async_free_list, closure);
++        g_mutex_unlock (&async_free_list_lock);
+         break;
+     case GI_SCOPE_TYPE_INVALID:
+     case GI_SCOPE_TYPE_FOREVER:
+@@ -622,9 +625,11 @@ _pygi_make_native_closure (GICallableInfo *info, PyGIClosureCache *cache,
+     ffi_closure *fficlosure;
+ 
+     /* Begin by cleaning up old async functions */
++    g_mutex_lock (&async_free_list_lock);
+     g_slist_free_full (async_free_list,
+                        (GDestroyNotify)_pygi_invoke_closure_free);
+     async_free_list = NULL;
++    g_mutex_unlock (&async_free_list_lock);
+ 
+     /* Build the closure itself */
+     closure = g_slice_new0 (PyGICClosure);
+diff --git a/gi/pygi-foreign-cairo.c b/gi/pygi-foreign-cairo.c
+index 4f95d6ad..984e193d 100644
+--- a/gi/pygi-foreign-cairo.c
++++ b/gi/pygi-foreign-cairo.c
+@@ -687,6 +687,9 @@ static PyMethodDef _gi_cairo_functions[] = {
+ 
+ static PyModuleDef_Slot _gi_cairo_slots[] = {
+     { Py_mod_exec, _gi_cairo_exec },
++#ifdef Py_GIL_DISABLED
++    { Py_mod_gil, Py_MOD_GIL_NOT_USED },
++#endif
+     { 0, NULL },
+ };
+ 
+diff --git a/gi/pygi-foreign.c b/gi/pygi-foreign.c
+index fc7e515d..a0c64654 100644
+--- a/gi/pygi-foreign.c
++++ b/gi/pygi-foreign.c
+@@ -36,12 +36,6 @@ typedef struct {
+ 
+ static GPtrArray *foreign_structs = NULL;
+ 
+-static void
+-init_foreign_structs (void)
+-{
+-    foreign_structs = g_ptr_array_new ();
+-}
+-
+ static PyGIForeignStruct *
+ do_lookup (const gchar *namespace, const gchar *name)
+ {
+@@ -200,13 +194,12 @@ int
+ pygi_foreign_init (void)
+ {
+     if (foreign_structs == NULL) {
+-        init_foreign_structs ();
++        foreign_structs = g_ptr_array_new ();
+     }
+ 
+     return 0;
+ }
+ 
+-
+ PyObject *
+ pygi_register_foreign (PyObject *self, PyObject *args)
+ {
+diff --git a/gi/pygi-info.c b/gi/pygi-info.c
+index eb645280..7d0f8826 100644
+--- a/gi/pygi-info.c
++++ b/gi/pygi-info.c
+@@ -27,6 +27,22 @@
+ #include "pygi-type.h"
+ #include "pygi-util.h"
+ 
++
++static gpointer
++init_once_py_generate_doc_string (gpointer user_data)
++{
++    PyObject *py_generate_doc_string;
++    PyObject *mod = PyImport_ImportModule ("gi.docstring");
++    if (!mod) return NULL;
++
++    py_generate_doc_string =
++        PyObject_GetAttrString (mod, "generate_doc_string");
++
++    Py_DECREF (mod);
++
++    return py_generate_doc_string;
++}
++
+ /* _generate_doc_string
+  *
+  * C wrapper to call Python implemented "gi.docstring.generate_doc_string"
+@@ -34,43 +50,43 @@
+ static PyObject *
+ _generate_doc_string (PyGIBaseInfo *self)
+ {
+-    static PyObject *_py_generate_doc_string = NULL;
++    static GOnce once_py_generate_doc_string = G_ONCE_INIT;
++    PyObject *py_generate_doc_string = NULL;
+ 
+-    if (_py_generate_doc_string == NULL) {
+-        PyObject *mod = PyImport_ImportModule ("gi.docstring");
+-        if (!mod) return NULL;
++    g_once (&once_py_generate_doc_string, init_once_py_generate_doc_string,
++            NULL);
++    py_generate_doc_string = once_py_generate_doc_string.retval;
++    if (py_generate_doc_string == NULL) return NULL;
+ 
+-        _py_generate_doc_string =
+-            PyObject_GetAttrString (mod, "generate_doc_string");
+-        if (_py_generate_doc_string == NULL) {
+-            Py_DECREF (mod);
+-            return NULL;
+-        }
+-        Py_DECREF (mod);
+-    }
++    return PyObject_CallFunctionObjArgs (py_generate_doc_string, self, NULL);
++}
++
++static gpointer
++init_once_py_generate_signature (gpointer user_data)
++{
++    PyObject *py_generate_signature;
++    PyObject *mod = PyImport_ImportModule ("gi._signature");
++    if (!mod) return NULL;
+ 
+-    return PyObject_CallFunctionObjArgs (_py_generate_doc_string, self, NULL);
++    py_generate_signature = PyObject_GetAttrString (mod, "generate_signature");
++
++    Py_DECREF (mod);
++
++    return py_generate_signature;
+ }
+ 
+ static PyObject *
+ _generate_signature (PyGICallableInfo *self)
+ {
+-    static PyObject *_py_generate_signature = NULL;
++    static GOnce once_py_generate_signature = G_ONCE_INIT;
++    PyObject *py_generate_signature;
+ 
+-    if (_py_generate_signature == NULL) {
+-        PyObject *mod = PyImport_ImportModule ("gi._signature");
+-        if (!mod) return NULL;
++    g_once (&once_py_generate_signature, init_once_py_generate_signature,
++            NULL);
++    py_generate_signature = once_py_generate_signature.retval;
++    if (py_generate_signature == NULL) return NULL;
+ 
+-        _py_generate_signature =
+-            PyObject_GetAttrString (mod, "generate_signature");
+-        if (_py_generate_signature == NULL) {
+-            Py_DECREF (mod);
+-            return NULL;
+-        }
+-        Py_DECREF (mod);
+-    }
+-
+-    return PyObject_CallFunctionObjArgs (_py_generate_signature, self, NULL);
++    return PyObject_CallFunctionObjArgs (py_generate_signature, self, NULL);
+ }
+ 
+ static PyObject *
+@@ -345,6 +361,12 @@ static PyMethodDef _PyGIBaseInfo_methods[] = {
+     { NULL, NULL, 0 },
+ };
+ 
++static gpointer
++init_once_docstr (gpointer user_data)
++{
++    return PyUnicode_InternFromString ("__doc__");
++}
++
+ /* _base_info_getattro:
+  *
+  * The usage of __getattr__ is needed because the get/set method table
+@@ -353,13 +375,13 @@ static PyMethodDef _PyGIBaseInfo_methods[] = {
+ static PyObject *
+ _base_info_getattro (PyGIBaseInfo *self, PyObject *name)
+ {
++    static GOnce once_docstr = G_ONCE_INIT;
++    PyObject *docstr;
+     PyObject *result;
+ 
+-    static PyObject *docstr;
+-    if (docstr == NULL) {
+-        docstr = PyUnicode_InternFromString ("__doc__");
+-        if (docstr == NULL) return NULL;
+-    }
++    g_once (&once_docstr, init_once_docstr, NULL);
++    docstr = once_docstr.retval;
++    if (docstr == NULL) return NULL;
+ 
+     Py_INCREF (name);
+     PyUnicode_InternInPlace (&name);
+@@ -718,7 +740,16 @@ pygi_callable_info_get_cache (PyGICallableInfo *self)
+     PyGIFunctionCache *function_cache;
+     GIBaseInfo *info = self->base.info;
+ 
+-    if (self->cache != NULL) return self->cache;
++#ifdef Py_GIL_DISABLED
++    Py_BEGIN_CRITICAL_SECTION (self);
++#endif
++
++    if (self->cache != NULL) {
++#ifdef Py_GIL_DISABLED
++        Py_END_CRITICAL_SECTION ();
++#endif
++        return self->cache;
++    }
+ 
+     if (GI_IS_FUNCTION_INFO (info)) {
+         GIFunctionInfoFlags flags;
+@@ -743,6 +774,10 @@ pygi_callable_info_get_cache (PyGICallableInfo *self)
+ 
+     self->cache = function_cache;
+ 
++#ifdef Py_GIL_DISABLED
++    Py_END_CRITICAL_SECTION ();
++#endif
++
+     return function_cache;
+ }
+ 
+diff --git a/gi/pygi-invoke.c b/gi/pygi-invoke.c
+index 5e12b715..b9d2713a 100644
+--- a/gi/pygi-invoke.c
++++ b/gi/pygi-invoke.c
+@@ -216,8 +216,11 @@ _py_args_combine_and_check_length (PyGICallableCache *cache,
+ 
+ #define PyGI_INVOKE_ARG_STATE_SIZE(n)                                         \
+     (n * (sizeof (PyGIInvokeArgState) + sizeof (GIArgument *)))
++
++#ifndef Py_GIL_DISABLED
+ #define PyGI_INVOKE_ARG_STATE_N_MAX 10
+ static gpointer free_arg_state[PyGI_INVOKE_ARG_STATE_N_MAX];
++#endif
+ 
+ /**
+  * _pygi_invoke_arg_state_init:
+@@ -229,6 +232,7 @@ _pygi_invoke_arg_state_init (PyGIInvokeState *state)
+ {
+     gpointer mem;
+ 
++#ifndef Py_GIL_DISABLED
+     if (state->n_args < PyGI_INVOKE_ARG_STATE_N_MAX
+         && (mem = free_arg_state[state->n_args]) != NULL) {
+         free_arg_state[state->n_args] = NULL;
+@@ -236,6 +240,9 @@ _pygi_invoke_arg_state_init (PyGIInvokeState *state)
+     } else {
+         mem = g_slice_alloc0 (PyGI_INVOKE_ARG_STATE_SIZE (state->n_args));
+     }
++#else
++    mem = g_slice_alloc0 (PyGI_INVOKE_ARG_STATE_SIZE (state->n_args));
++#endif
+ 
+     if (mem == NULL && state->n_args != 0) {
+         PyErr_NoMemory ();
+@@ -259,11 +266,13 @@ _pygi_invoke_arg_state_init (PyGIInvokeState *state)
+ void
+ _pygi_invoke_arg_state_free (PyGIInvokeState *state)
+ {
++#ifndef Py_GIL_DISABLED
+     if (state->n_args < PyGI_INVOKE_ARG_STATE_N_MAX
+         && free_arg_state[state->n_args] == NULL) {
+         free_arg_state[state->n_args] = state->args;
+         return;
+     }
++#endif
+ 
+     g_slice_free1 (PyGI_INVOKE_ARG_STATE_SIZE (state->n_args), state->args);
+ }
+diff --git a/gi/pygi-repository.c b/gi/pygi-repository.c
+index 639b07e3..4781ac3b 100644
+--- a/gi/pygi-repository.c
++++ b/gi/pygi-repository.c
+@@ -30,35 +30,48 @@ PyObject *PyGIRepositoryError;
+ PYGI_DEFINE_TYPE ("gi.Repository", PyGIRepository_Type, PyGIRepository);
+ 
+ 
+-GIRepository *
+-pygi_repository_get_default (void)
++static gpointer
++init_once_default_repository (gpointer user_data)
+ {
+-    static GIRepository *default_repository = NULL;
+-
+-    if (default_repository == NULL)
+ #if GLIB_CHECK_VERSION(2, 85, 0)
+-        default_repository = gi_repository_dup_default ();
++    return gi_repository_dup_default ();
+ #else
+-        default_repository = gi_repository_new ();
++    return gi_repository_new ();
+ #endif
++}
++
++GIRepository *
++pygi_repository_get_default (void)
++{
++    static GOnce once_default_repository = G_ONCE_INIT;
+ 
+-    return default_repository;
++    g_once (&once_default_repository, init_once_default_repository, NULL);
++
++    return once_default_repository.retval;
++}
++
++static gpointer
++init_once_py_default_repository (gpointer user_data)
++{
++    PyGIRepository *repository =
++        (PyGIRepository *)PyObject_New (PyGIRepository, &PyGIRepository_Type);
++    if (repository == NULL) {
++        return NULL;
++    }
++
++    repository->repository = pygi_repository_get_default ();
++
++    return repository;
+ }
+ 
+ static PyObject *
+ _wrap_pygi_repository_get_default (PyObject *self)
+ {
+-    static PyGIRepository *repository = NULL;
+-
+-    if (!repository) {
+-        repository = (PyGIRepository *)PyObject_New (PyGIRepository,
+-                                                     &PyGIRepository_Type);
+-        if (repository == NULL) {
+-            return NULL;
+-        }
++    PyGIRepository *repository;
++    static GOnce once_repository = G_ONCE_INIT;
+ 
+-        repository->repository = pygi_repository_get_default ();
+-    }
++    g_once (&once_repository, init_once_py_default_repository, NULL);
++    repository = once_repository.retval;
+ 
+     Py_INCREF ((PyObject *)repository);
+     return (PyObject *)repository;
+diff --git a/gi/pygi-resulttuple.c b/gi/pygi-resulttuple.c
+index b09280c8..5f9ed7af 100644
+--- a/gi/pygi-resulttuple.c
++++ b/gi/pygi-resulttuple.c
+@@ -23,13 +23,9 @@
+ static char repr_format_key[] = "__repr_format";
+ static char tuple_indices_key[] = "__tuple_indices";
+ 
++#if !defined(PYPY_VERSION) && !defined(Py_GIL_DISABLED)
+ #define PYGI_USE_FREELIST
+ 
+-#ifdef PYPY_VERSION
+-#undef PYGI_USE_FREELIST
+-#endif
+-
+-#ifdef PYGI_USE_FREELIST
+ /* A free list similar to the one used for the CPython tuple. Difference
+  * is that zero length tuples aren't cached (as we don't need them)
+  * and that the freelist is smaller as we don't free it with the cyclic GC
+diff --git a/gi/pygi-type.c b/gi/pygi-type.c
+index ec9a3168..79ecf648 100644
+--- a/gi/pygi-type.c
++++ b/gi/pygi-type.c
+@@ -716,6 +716,18 @@ pyg_flags_get_value (GType flag_type, PyObject *obj, guint *val)
+ static GQuark pyg_type_marshal_key = 0;
+ static GQuark pyg_type_marshal_helper_key = 0;
+ 
++static GOnce once_marshal_quarks = G_ONCE_INIT;
++
++static gpointer
++init_once_marshal_quarks (gpointer user_data)
++{
++    pyg_type_marshal_key = g_quark_from_static_string ("PyGType::marshal");
++    pyg_type_marshal_helper_key =
++        g_quark_from_static_string ("PyGType::marshal-helper");
++
++    return NULL;
++}
++
+ typedef enum _marshal_helper_data_e marshal_helper_data_e;
+ enum _marshal_helper_data_e {
+     MARSHAL_HELPER_NONE = 0,
+@@ -768,18 +780,13 @@ pyg_type_lookup (GType type)
+  * fundamental types, you may use this function to register conversion
+  * handlers.
+  */
+-
+ void
+ pyg_register_gtype_custom (GType gtype, fromvaluefunc from_func,
+                            tovaluefunc to_func)
+ {
+     PyGTypeMarshal *tm;
+ 
+-    if (!pyg_type_marshal_key) {
+-        pyg_type_marshal_key = g_quark_from_static_string ("PyGType::marshal");
+-        pyg_type_marshal_helper_key =
+-            g_quark_from_static_string ("PyGType::marshal-helper");
+-    }
++    g_once (&once_marshal_quarks, init_once_marshal_quarks, NULL);
+ 
+     tm = g_new (PyGTypeMarshal, 1);
+     tm->fromvalue = from_func;
+@@ -1030,6 +1037,18 @@ pyg_signal_class_closure_marshal (GClosure *closure, GValue *return_value,
+     PyGILState_Release (state);
+ }
+ 
++static gpointer
++init_once_closure (gpointer user_data)
++{
++    GClosure *closure = g_closure_new_simple (sizeof (GClosure), NULL);
++    g_closure_set_marshal (closure, pyg_signal_class_closure_marshal);
++
++    g_closure_ref (closure);
++    g_closure_sink (closure);
++
++    return closure;
++}
++
+ /**
+  * pyg_signal_class_closure_get:
+  *
+@@ -1042,16 +1061,11 @@ pyg_signal_class_closure_marshal (GClosure *closure, GValue *return_value,
+ GClosure *
+ pyg_signal_class_closure_get (void)
+ {
+-    static GClosure *closure;
++    static GOnce once_closure = G_ONCE_INIT;
+ 
+-    if (closure == NULL) {
+-        closure = g_closure_new_simple (sizeof (GClosure), NULL);
+-        g_closure_set_marshal (closure, pyg_signal_class_closure_marshal);
++    g_once (&once_closure, init_once_closure, NULL);
+ 
+-        g_closure_ref (closure);
+-        g_closure_sink (closure);
+-    }
+-    return closure;
++    return once_closure.retval;
+ }
+ 
+ /* ----- __doc__ descriptor for GObject and GInterface ----- */
+@@ -1203,6 +1217,15 @@ object_doc_descr_get (PyObject *self, PyObject *obj, PyObject *type)
+ 
+ PYGI_DEFINE_TYPE ("gobject.GObject.__doc__", PyGObjectDoc_Type, PyObject);
+ 
++static gpointer
++init_once_doc_descr (gpointer user_data)
++{
++    Py_SET_TYPE (&PyGObjectDoc_Type, &PyType_Type);
++    if (PyType_Ready (&PyGObjectDoc_Type)) return NULL;
++
++    return PyObject_New (PyObject, &PyGObjectDoc_Type);
++}
++
+ /**
+  * pyg_object_descr_doc_get:
+  *
+@@ -1215,16 +1238,11 @@ PYGI_DEFINE_TYPE ("gobject.GObject.__doc__", PyGObjectDoc_Type, PyObject);
+ PyObject *
+ pyg_object_descr_doc_get (void)
+ {
+-    static PyObject *doc_descr = NULL;
++    static GOnce once_doc_descr = G_ONCE_INIT;
+ 
+-    if (!doc_descr) {
+-        Py_SET_TYPE (&PyGObjectDoc_Type, &PyType_Type);
+-        if (PyType_Ready (&PyGObjectDoc_Type)) return NULL;
++    g_once (&once_doc_descr, init_once_doc_descr, NULL);
+ 
+-        doc_descr = PyObject_New (PyObject, &PyGObjectDoc_Type);
+-        if (doc_descr == NULL) return NULL;
+-    }
+-    return doc_descr;
++    return once_doc_descr.retval;
+ }
+ 
+ 
+diff --git a/gi/pygi-util.c b/gi/pygi-util.c
+index 121d0e11..f29d50d8 100644
+--- a/gi/pygi-util.c
++++ b/gi/pygi-util.c
+@@ -102,20 +102,28 @@ pyg_constant_strip_prefix (const gchar *name, const gchar *strip_prefix)
+     return name;
+ }
+ 
++static gpointer
++init_once_iskeyword (gpointer user_data)
++{
++    PyObject *iskeyword;
++    PyObject *keyword_module = PyImport_ImportModule ("keyword");
++    if (!keyword_module) return NULL;
++
++    iskeyword = PyObject_GetAttrString (keyword_module, "iskeyword");
++    Py_DECREF (keyword_module);
++
++    return iskeyword;
++}
++
+ PyObject *
+ pyg_is_python_keyword (const gchar *name)
+ {
+-    static PyObject *iskeyword = NULL;
+-    PyObject *pyname, *result;
+-
+-    if (!iskeyword) {
+-        PyObject *keyword_module = PyImport_ImportModule ("keyword");
+-        if (!keyword_module) return NULL;
++    static GOnce once_iskeyword = G_ONCE_INIT;
++    PyObject *iskeyword, *pyname, *result;
+ 
+-        iskeyword = PyObject_GetAttrString (keyword_module, "iskeyword");
+-        Py_DECREF (keyword_module);
+-        if (!iskeyword) return NULL;
+-    }
++    g_once (&once_iskeyword, init_once_iskeyword, NULL);
++    iskeyword = once_iskeyword.retval;
++    if (!iskeyword) return NULL;
+ 
+     /* Python 3.x; note that we explicitly keep "print"; it is not a keyword
+      * any more, but we do not want to break API between Python versions */
+diff --git a/tests/test_overrides_gtk.py b/tests/test_overrides_gtk.py
+index d07d9094..1dd10b14 100644
+--- a/tests/test_overrides_gtk.py
++++ b/tests/test_overrides_gtk.py
+@@ -428,6 +428,7 @@ class TestGtk(unittest.TestCase):
+         )
+ 
+     @unittest.skipUnless(Gtk_version == "4.0", "no GtkWindowType in gtk4")
++    @pytest.mark.thread_unsafe
+     def test_window_gtk4(self):
+         w = Gtk.Window()
+ 
+diff --git a/tests/testhelpermodule.c b/tests/testhelpermodule.c
+index dcf692df..bb022a6f 100644
+--- a/tests/testhelpermodule.c
++++ b/tests/testhelpermodule.c
+@@ -817,6 +817,10 @@ PyInit_testhelper (void)
+ 
+     module = PyModule_Create (&_testhelpermodule);
+ 
++#ifdef Py_GIL_DISABLED
++    PyUnstable_Module_SetGIL (module, Py_MOD_GIL_NOT_USED);
++#endif
++
+     if ((gobject_module = pygobject_init (-1, -1, -1)) == NULL) return NULL;
+     Py_DECREF (gobject_module);
+ 

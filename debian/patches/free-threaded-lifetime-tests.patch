@@ -1,7 +1,7 @@
 Description: Keep reference-count tests meaningful on free-threaded Python
 Author: Robolightning <irobolightning@gmail.com>
 Origin: https://github.com/StableKite/pygobject
-Forwarded: no
+Forwarded: https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/577
 Last-Update: 2026-11-12
 
 --- a/tests/test_everything.py

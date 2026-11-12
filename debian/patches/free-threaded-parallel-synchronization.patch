@@ -1,7 +1,7 @@
 Description: Synchronize free-threaded metadata and native test fixtures
 Author: Robolightning <irobolightning@gmail.com>
 Origin: https://github.com/StableKite/pygobject/tree/codex/free-threading-parallel-fixes
-Forwarded: not-needed, upstream submission follows native validation
+Forwarded: https://gitlab.gnome.org/GNOME/pygobject/-/merge_requests/579
 Last-Update: 2026-11-12
 
 diff --git a/gi/gimodule.c b/gi/gimodule.c

@@ -1,0 +1,73 @@
+#!/usr/bin/make -f
+
+include /usr/share/dpkg/default.mk
+
+VERSIONS := $(shell py3versions --supported -v)
+
+TESTSUITE_FAIL_CMD=exit 1
+NON_FATAL=( echo "*** test-suite FAILED but continuing anyway ***"; true; )
+ifneq ($(filter $(DEB_BUILD_ARCH), ),)
+# tests currently fail on these architectures
+    TESTSUITE_FAIL_CMD=$(NON_FATAL)
+endif
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@
+
+override_dh_auto_configure-arch:
+	set -e; for v in $(VERSIONS); do \
+		dh_auto_configure \
+			--builddirectory=build-$$v \
+			-- \
+			-Dpython=/usr/bin/python$$v \
+			; \
+	done
+
+override_dh_auto_build-arch:
+	set -e; for v in $(VERSIONS); do \
+		PYTHON=/usr/bin/python$$v \
+		dh_auto_build \
+			--arch \
+			--builddirectory=build-$$v \
+			-- \
+			; \
+	done
+
+# don't run the tests under fakeroot, otherwise they will try to connect to
+# root's session D-BUS
+override_dh_auto_test-arch:
+ifeq ($(DEB_HOST_ARCH_OS), linux)
+	set -e; for v in $(VERSIONS); do \
+		LC_ALL=C.UTF-8; \
+		PYTHON=/usr/bin/python$$v; \
+		export HOME=$(CURDIR)/debian/tmp/home; \
+		mkdir -p $$HOME/.local/share; \
+		unset LD_PRELOAD; \
+		VERBOSE=1; \
+		xvfb-run dh_auto_test \
+			--arch \
+			--builddirectory=build-$$v \
+			-- \
+			--timeout-multiplier 3 \
+			|| $(TESTSUITE_FAIL_CMD) \
+			; \
+		while [ -e /tmp/.X99-lock ]; do \
+			echo "Waiting for xvfb to finish..."; \
+			sleep 0.5; \
+		done; \
+	done
+endif
+
+override_dh_auto_install-arch:
+	set -e; for v in $(VERSIONS); do \
+		PYTHON=/usr/bin/python$$v \
+		VERBOSE=1 \
+		dh_auto_install \
+			--arch \
+			--builddirectory=build-$$v \
+			--destdir=debian/tmp \
+			-- \
+			; \
+	done

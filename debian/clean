@@ -1,0 +1,6 @@
+config.h
+gi/*.so
+tests/*.gir
+tests/*.so
+tests/*.typelib
+tests/gschemas.compiled

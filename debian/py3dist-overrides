@@ -1,0 +1,4 @@
+# we've split python3-gi-cairo out into its own package - the effect of this
+# file is to suppress the dependency from python3-gi that dh_python3 adds since
+# it is not used by python3-gi
+pycairo

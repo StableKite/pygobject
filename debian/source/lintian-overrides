@@ -1,0 +1,8 @@
+# We build with Meson directly, not via mesonpy
+missing-prerequisite-for-pyproject-backend mesonpy (*) [pyproject.toml:*]
+# Only used conditionally
+uses-deprecated-python-stdlib distutils (*) [subprojects/pythoncapi-compat/runtests.py:*]
+# Only used conditionally
+uses-deprecated-python-stdlib distutils (*) [subprojects/pythoncapi-compat/tests/setup.py:*]
+# Only used conditionally
+uses-deprecated-python-stdlib pipes (*) [subprojects/pythoncapi-compat/tests/setup.py:*]

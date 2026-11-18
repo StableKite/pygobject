@@ -46,17 +46,13 @@ ifeq ($(DEB_HOST_ARCH_OS), linux)
 		mkdir -p $$HOME/.local/share; \
 		unset LD_PRELOAD; \
 		VERBOSE=1; \
-		xvfb-run dh_auto_test \
+		xvfb-run --auto-servernum --error-file=/dev/stderr dh_auto_test \
 			--arch \
 			--builddirectory=build-$$v \
 			-- \
 			--timeout-multiplier 3 \
 			|| $(TESTSUITE_FAIL_CMD) \
 			; \
-		while [ -e /tmp/.X99-lock ]; do \
-			echo "Waiting for xvfb to finish..."; \
-			sleep 0.5; \
-		done; \
 	done
 endif
 
